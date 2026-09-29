@@ -152,6 +152,45 @@ public static void DespawnAllGrabbables(NetworkManager manager, List<NetworkGrab
 
 `CollectSpawnedGrabbables` / `DespawnAllGrabbables` 是约束 #1 的唯一正确实现,不要在别处重写。
 
+### `StationBase`(抽象 NetworkBehaviour)—— P0.1
+
+```csharp
+public abstract class StationBase : NetworkBehaviour
+{
+    public float InteractReach { get; }
+
+    [Server] public void ServerInteract(PlayerInteraction player, NetworkConnection conn, bool longPress);
+    protected abstract void OnServerInteract(PlayerInteraction player, NetworkConnection conn, bool longPress);
+}
+```
+
+**工位继承它,覆写 `OnServerInteract`。**
+
+**不要给 `OnServerInteract` 加 `[Server]`。** weaver 是靠**改写方法体**插入守卫的,而抽象方法没有方法体 —— 标上去会让 weaver 空引用。守卫在具体的 `ServerInteract` 上,覆写者只能经由它被调用。
+
+工位靠**自己的碰撞体**被玩家的扇区检测找到。`InteractReach` 只是服务端的粗校验,用来防止改过的客户端隔着地图操作机器 —— 客户端找到工位时已经判定过一次距离了。
+
+### 玩家侧(已冻结)
+
+```csharp
+// PlayerInteraction
+public Vector3 HandPosition { get; }                         // 服务端读:生成物体时的落点
+[Server] public void ServerHandToPlayer(NetworkObject nob);   // 让玩家开始持有刚生成给他的物体
+
+// NetworkGrabbable
+public static bool IsHeldBy(NetworkManager manager, int clientId);   // 服务端:「双手为空」的判定
+```
+
+**「双手为空」一律用 `!NetworkGrabbable.IsHeldBy(manager, conn.ClientId)`。** 服务端没有现成的携带标志,这个静态是唯一正确实现 —— 不要在别处重写一份。
+
+**往玩家手里生成物体的两步(缺一不可)**:
+1. `GrabbableSpawner.SpawnGrabbable(payload, player.HandPosition, rot, conn)` —— 所有权直接给该玩家
+2. `player.ServerHandToPlayer(nob)` —— 让客户端开始持有
+
+只做第一步物体掉在地上;只做第二步没有物体。
+
+**交互的动词是 `bool longPress`**(按住 ≥ 0.3 秒为 true),在**松手时**发出。不关心长短按的工位忽略它即可。玩家按 E 时**抓取优先**,抓不到才轮到工位 —— 所以工位摆在桌子旁边不会让桌上的东西变得捡不起来。
+
 ---
 
 ## 三、拆分与文件所有权
@@ -159,11 +198,12 @@ public static void DespawnAllGrabbables(NetworkManager manager, List<NetworkGrab
 | 窗口 | 独占文件 | 依赖 | 状态 |
 |---|---|---|---|
 | P0 | `Containers/*`、`NetworkGrabbable` 换装、两处硬性修复 | — | **完成** |
-| W1 打印机 | `Stations/Printer.cs`、`Stations/PrinterQueue.cs` | P0 | 可开工 |
-| W2 原料箱 | `Stations/PaperBox.cs` | P0 | 可开工 |
-| W3 吸附阻挡 | `Interaction/PlacementBlocker.cs`、`Interaction/SnapSurface.cs` | 无 | 可开工 |
-| W4 保洁阿姨 | `Npc/Cleaner.cs` | 无 | 可开工 |
-| W5 体力 | `Player/PlayerStamina.cs` + `PlayerMovementPrediction.cs`(独占) | 无 | 可开工 |
-| W6 调试 HUD | `UI/DebugHud.cs` | P0 | 可开工 |
+| P0.1 | `Stations/StationBase.cs`、`PlayerInteraction` 交互通道 | P0 | **完成** |
+| W1 打印机 | `Stations/Printer.cs`、`Stations/PrinterQueue.cs` | P0 + P0.1 | **可开工** |
+| W2 原料箱 | `Stations/PaperBox.cs` | P0 + P0.1 | **可开工** |
+| W3 吸附阻挡 | `Interaction/PlacementBlocker.cs`、`Interaction/SnapSurface.cs` | 无 | 完成 |
+| W4 保洁阿姨 | `Npc/Cleaner.cs` | 无 | 完成 |
+| W5 体力 | `Player/PlayerStamina.cs` + `PlayerMovementPrediction.cs`(独占) | 无 | 完成 |
+| W6 调试 HUD | `UI/DebugHud.cs` | P0 | 完成 |
 
 **文件所有权是硬性的。** 两个窗口碰同一个文件必然冲突。需要改别人名下的文件,先找核心窗口。

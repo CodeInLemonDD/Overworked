@@ -3,6 +3,7 @@ using FishNet.Connection;
 using FishNet.Object;
 using FishNet.Transporting;
 using FishNet.Utility.Template;
+using Overworked.Stations;
 using UnityEngine;
 using UnityEngine.InputSystem;
 
@@ -179,6 +180,33 @@ namespace Overworked.Interaction
         private float _kickLift = 0.15f;
 
         /// <summary>
+        /// How far from the player a station can be and still be operated.
+        /// </summary>
+        /// <remarks>
+        /// Longer than the pickup radius because a machine is a large object. A station's pivot
+        /// sits at the base of the table it stands on, and the player stands at the edge, so a
+        /// radius tuned for reaching an object on the floor would put most machines out of range.
+        /// </remarks>
+        [Tooltip("How far from the player a station can be and still be operated.")]
+        [SerializeField]
+        private float _stationReach = 2.5f;
+
+        /// <summary>
+        /// Half-angle of the forward sector a station must be inside to be operated.
+        /// </summary>
+        [Tooltip("Half-angle of the forward sector a station must be inside to be operated.")]
+        [Range(0f, 180f)]
+        [SerializeField]
+        private float _stationHalfAngle = 75f;
+
+        /// <summary>
+        /// Presses at or over this duration are sent to a station as a long press.
+        /// </summary>
+        [Tooltip("Presses at or over this duration are sent to a station as a long press.")]
+        [SerializeField]
+        private float _stationLongPressSeconds = 0.3f;
+
+        /// <summary>
         /// Per-object copy of the assigned action asset. See PlayerMovementPrediction for
         /// why the shared asset must not be used directly.
         /// </summary>
@@ -240,6 +268,16 @@ namespace Overworked.Interaction
         /// When the outstanding pickup request was sent.
         /// </summary>
         private float _requestSentTime;
+
+        /// <summary>
+        /// The station the current Interact press is aimed at, or null.
+        /// </summary>
+        private NetworkObject _stationTarget;
+
+        /// <summary>
+        /// When the current station press began.
+        /// </summary>
+        private float _stationPressTime;
 
         /// <summary>
         /// When the current Interact press began.
@@ -439,6 +477,11 @@ namespace Overworked.Interaction
 
             ResolvePendingRequest();
 
+            /* Ahead of the branch below, so a press that began at a station is still finished
+             * when a carry starts in between. The release edge is the only chance to send it, and
+             * the carrying path never looks at it. */
+            UpdateStationPress();
+
             if (_isCarrying)
                 UpdateCarry();
             else
@@ -458,14 +501,97 @@ namespace Overworked.Interaction
                 return;
 
             NetworkObject best = FindBestPickup();
-            if (best == null)
+            if (best != null)
+            {
+                _requested = best;
+                _requestPending = true;
+                _requestSentTime = Time.time;
+
+                CmdRequestPickup(best);
+                return;
+            }
+
+            /* Nothing to pick up, so the press belongs to whatever station is in front. Grabbing
+             * keeps priority on purpose: a machine standing next to a table would otherwise make
+             * everything on that table silently unpickable, and the player would have no way to
+             * tell why. */
+            _stationTarget = FindStationInFront();
+            if (_stationTarget != null)
+                _stationPressTime = Time.time;
+        }
+
+        /// <summary>
+        /// Sends an outstanding station press when the key comes up.
+        /// </summary>
+        /// <remarks>
+        /// Sent on release rather than on press, so the station learns how long the key was held.
+        /// The target is cleared either way, because the release is the only chance to send it.
+        /// </remarks>
+        private void UpdateStationPress()
+        {
+            if (_stationTarget == null)
+                return;
+            if (_interactAction == null || !_interactAction.WasReleasedThisFrame())
                 return;
 
-            _requested = best;
-            _requestPending = true;
-            _requestSentTime = Time.time;
+            bool longPress = (Time.time - _stationPressTime) >= _stationLongPressSeconds;
 
-            CmdRequestPickup(best);
+            CmdInteractWith(_stationTarget, longPress);
+            _stationTarget = null;
+        }
+
+        /// <summary>
+        /// Finds the nearest station inside the forward sector.
+        /// </summary>
+        /// <remarks>
+        /// Deliberately mirrors FindBestPickup: the player has one idea of "the thing in front of
+        /// me", and two different rules for it would read as the game guessing. Distance is taken
+        /// to the nearest point on the collider rather than to the station's pivot, because that
+        /// pivot sits at the base of the table and a wide machine would otherwise be unreachable
+        /// from the far end of its own frontage.
+        /// </remarks>
+        private NetworkObject FindStationInFront()
+        {
+            Vector3 origin = transform.position;
+
+            Vector3 forward = transform.forward;
+            forward.y = 0f;
+            if (forward.sqrMagnitude < 0.0001f)
+                forward = Vector3.forward;
+            forward.Normalize();
+
+            int count = Physics.OverlapSphereNonAlloc(origin, _stationReach, _overlapBuffer, ~0, QueryTriggerInteraction.Ignore);
+
+            float minDot = Mathf.Cos(_stationHalfAngle * Mathf.Deg2Rad);
+            NetworkObject best = null;
+            float bestDistance = float.MaxValue;
+
+            for (int i = 0; i < count; i++)
+            {
+                Collider candidate = _overlapBuffer[i];
+                if (candidate == null)
+                    continue;
+
+                StationBase station = candidate.GetComponentInParent<StationBase>();
+                if (station == null || !station.IsSpawned)
+                    continue;
+
+                Vector3 to = candidate.ClosestPoint(origin) - origin;
+                to.y = 0f;
+
+                float distance = to.magnitude;
+                if (distance > _stationReach)
+                    continue;
+                if (distance > 0.0001f && Vector3.Dot(forward, to / distance) < minDot)
+                    continue;
+                if (distance >= bestDistance)
+                    continue;
+
+                bestDistance = distance;
+                best = station.NetworkObject;
+            }
+
+            return best;
         }
 
         /// <summary>
@@ -759,6 +885,94 @@ namespace Overworked.Interaction
             ReleaseCarry();
 
             CmdNotifyThrown(carried);
+        }
+
+        /// <summary>
+        /// Where something should be placed when it is handed straight to this player.
+        /// </summary>
+        /// <remarks>
+        /// Read on the server, so it is the server's copy of the player. The owner's own copy runs
+        /// a frame or so ahead, which does not matter for an object that is about to be driven to
+        /// the hold point every frame anyway.
+        /// </remarks>
+        public Vector3 HandPosition => HoldTransform.position;
+
+        /// <summary>
+        /// Server: makes this player start carrying an object.
+        /// </summary>
+        /// <remarks>
+        /// The object must already be spawned and owned by this player's connection. This is for
+        /// anything generated straight into someone's hands — a box handing out a sheet, a printer
+        /// handing over a finished document — and it is deliberately not the pickup path: there is
+        /// nothing on the ground to request, so the client cannot start the carry itself.
+        /// </remarks>
+        [Server]
+        public void ServerHandToPlayer(NetworkObject target)
+        {
+            if (target == null || !target.IsSpawned)
+                return;
+            if (!Owner.IsValid)
+                return;
+
+            RpcHandToPlayer(Owner, target);
+        }
+
+        /// <summary>
+        /// Client: starts carrying an object the server put in this player's hands.
+        /// </summary>
+        [TargetRpc]
+        private void RpcHandToPlayer(NetworkConnection conn, NetworkObject target)
+        {
+            if (target == null)
+                return;
+
+            NetworkGrabbable grabbable = target.GetComponent<NetworkGrabbable>();
+            if (grabbable == null)
+                return;
+
+            /* Any pickup still in flight is abandoned. The hands are occupied now, and leaving the
+             * request open would let it land later and overwrite this. */
+            _requested = null;
+            _requestPending = false;
+
+            _carried = target;
+            _carriedGrabbable = grabbable;
+            _isCarrying = true;
+            _charging = false;
+        }
+
+        /// <summary>
+        /// Server: validates a station interaction and lets the station carry it out.
+        /// </summary>
+        /// <remarks>
+        /// Declared here rather than on the station because a ServerRpc defaults to requiring
+        /// ownership: this object is always owned by its own client, while a station is owned by
+        /// nobody and would reject the call outright. Everything past the range check belongs to
+        /// the station, including whether the player's hands are in the right state for it.
+        /// </remarks>
+        [ServerRpc]
+        private void CmdInteractWith(NetworkObject stationObject, bool longPress, NetworkConnection caller = null)
+        {
+            if (stationObject == null || caller == null || !caller.IsActive)
+                return;
+            if (!stationObject.IsSpawned)
+                return;
+
+            StationBase station = stationObject.GetComponentInChildren<StationBase>();
+            if (station == null)
+                return;
+
+            /* Range is checked against the server's own player transform, never against anything
+             * the client reported. */
+            Vector3 origin = transform.position;
+            Vector3 to = station.transform.position - origin;
+            to.y = 0f;
+
+            float reach = station.InteractReach + _serverRangeTolerance;
+            if (to.sqrMagnitude > reach * reach)
+                return;
+
+            station.ServerInteract(this, caller, longPress);
         }
 
         /// <summary>

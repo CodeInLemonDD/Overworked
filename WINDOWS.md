@@ -262,38 +262,137 @@ sortingOrder 0。我们一个全屏 RectTransform 盖上去会吃掉那两个按
 
 ---
 
-# W1 · 打印机(等 P0.1)
+# W1 · 打印机
 
 **名下文件**:`Assets/Scripts/Stations/Printer.cs`、`Assets/Scripts/Stations/PrinterQueue.cs`
 
-**做**:`StationBase` 的子类。
-- 根上:`ContainerBase`(输入:纸 + 墨)、`PlacementBlocker`(机器占住那格)、碰撞体
-- 子物件 `Output`:`ContainerBase` + `ContainerView`(产物堆在机器身上,可视化)
-- 输入齐了**自动**开工,消耗输入、把产物追加进 Output
-- **按阵营分队列**:用 `ContainerEntry.OwnerClientId`。调度规则 —— 只有一方有活时给它**全部**产能,双方都有活时**交替**
-- 电源这一轮**恒为开**,只留一个 `IsPowered` 接口
+**结构**:根上 `ContainerBase`(输入:纸 + 墨)+ `PlacementBlocker`(机器占住那格)+ 碰撞体;
+子物件 `Output` 上 `ContainerBase` + `ContainerView`(产物按列表顺序堆在机器身上)。
 
-**为什么这么分队列**:这样「往队列里灌自己的活」只烧自己的纸、只堵自己,而「让打印机一直有活干」就变成了压制对手的手段 —— **靠干活压制,不靠捣乱**。不需要任何反骚扰机制。
+**按阵营分队列是设计核心,不要简化掉**:`ContainerEntry.OwnerClientId` 标明是谁塞的;
+只有一方有活时给它**全部**产能,双方都有活时**交替**。这样「灌自己的队列」只烧自己的纸、只堵自己的活,
+完全无利可图;而「让打印机一直有活干」变成压制对手的手段 —— **靠干活压制,不靠捣乱**。
+不需要任何反骚扰机制。
 
-**这一轮不做数据**:`电脑 → 文件数据` 那条链没有,所以打印条件先用「纸 + 墨」。
+**这一轮不做数据**:`电脑 → 文件数据` 那条链还没有,打印条件先用「纸 + 墨」。
+
+```
+项目:E:\UnityProject\Overworked(Unity 6000.6.0f1 + FishNet 4.7.3 + URP,新输入系统,无 asmdef)
+
+开工前必读,按顺序:
+1. E:\UnityProject\Overworked\CONSTRAINTS.md —— 硬约束与已冻结接口。违反任何一条都会当场坏掉
+2. E:\UnityProject\Overworked\DEVELOPMENT.md —— 项目已有的坑
+
+你名下(只能改这些):
+- Assets/Scripts/Stations/Printer.cs        (新建)
+- Assets/Scripts/Stations/PrinterQueue.cs   (新建)
+
+规则:
+- 只改你名下的文件。需要改别人的文件,停下来告诉我
+- 交付前必须让项目能编译。单程序集,你的编译错误会让所有窗口都跑不起来
+- 接口不清楚先问,不要自己发明
+
+任务:打印机工位
+
+它是什么:一个 StationBase 子类,【自带模型桌子】,整件摆在场景里。桌子本身零功能,功能全在机器上。
+
+结构:
+- 根:ContainerBase(输入,容量 3:纸 + 墨 + 数据)+ PlacementBlocker(机器占住那一格)+ 碰撞体
+- 子物件 Output:ContainerBase(产物)+ ContainerView(把产物按列表顺序堆在机器身上)
+- Printer / PrinterQueue 负责行为
+
+行为:
+- 输入齐全后【自动】开工,不需要按 E 触发;消耗输入,把产物追加进 Output
+- 产物【堆在机器自己身上】,不进网格体系 —— 用 ContainerBase + ContainerView,
+  不要用 GrabbableSpawner 生成实物堆在台面上
+- 玩家按 E 从 Output 取产物:走 OnServerInteract →
+  GrabbableSpawner.SpawnGrabbable(payload, player.HandPosition, rot, conn) + player.ServerHandToPlayer(nob)
+  两步缺一不可,见 CONSTRAINTS.md 第二节末尾
+
+按阵营分队列(设计核心,不要简化掉):
+- 输入条目的 ContainerEntry.OwnerClientId 标明是谁塞的
+- 调度:只有一方有活 → 给它【全部】产能;双方都有活 → 【交替】
+- 为什么:这样「往队列里灌自己的活」只烧自己的纸、只堵自己的活,完全无利可图;
+  而「让打印机一直有活干」就变成了压制对手的手段。不需要任何反骚扰机制
+
+电源:这一轮【恒为开】,只留一个 IsPowered 接口,不要实现分区断电。
+
+数据:这一轮不做。电脑 → 文件数据那条链还没有,打印条件先用「纸 + 墨」。
+把「数据」那条留成一个占位并标明将来接哪里。
+
+验收(用户会用 MPPM 双实例测):
+- 塞纸 + 墨 → 自动产出,产物堆在机器上
+- 从 Output 取一份 → 生成到手里,能拿能扔能放置
+- 两个玩家同时喂 → 谁也不能把对方饿死(交替生效)
+- 一个玩家猛灌自己的队列 → 只拖慢自己
+```
 
 ---
 
-# W2 · 原料箱(等 P0.1)
+# W2 · 原料箱
 
 **名下文件**:`Assets/Scripts/Stations/PaperBox.cs`
 
-**做**:`StationBase` 的子类。一个 `ContainerBase`,**免费但慢速自补**(默认 8 秒补一份)。短按 E、双手为空 → 从容器取一份,生成真实物体**到手里**。
+**免费但慢速自补**,默认 8 秒补一份。短按 E、双手为空 → 取一份,生成实物**到手里**。
 
-**为什么免费**:材料经济不用钱,用时间。原料箱慢速自补 = 真正的货币是「跑一趟的时间」,而且**结构上不可能死锁**。指标是单调分数,永远不可花 —— 分数和货币不能是同一个数,否则指标清零即死锁。
+**为什么免费**:材料经济不用钱,用时间。慢速自补 = 真正的货币是「跑一趟的时间」,
+而且**结构上不可能死锁**(原料总会有,只是慢)。指标是单调分数,永远不可花 ——
+分数和货币不能是同一个数,否则指标清零即死锁。
+
+```
+项目:E:\UnityProject\Overworked(Unity 6000.6.0f1 + FishNet 4.7.3 + URP,新输入系统,无 asmdef)
+
+开工前必读,按顺序:
+1. E:\UnityProject\Overworked\CONSTRAINTS.md —— 硬约束与已冻结接口。违反任何一条都会当场坏掉
+2. E:\UnityProject\Overworked\DEVELOPMENT.md —— 项目已有的坑
+
+你名下(只能改这些):
+- Assets/Scripts/Stations/PaperBox.cs   (新建)
+
+规则:
+- 只改你名下的文件。需要改别人的文件,停下来告诉我
+- 交付前必须让项目能编译。单程序集,你的编译错误会让所有窗口都跑不起来
+- 接口不清楚先问,不要自己发明
+
+任务:原料箱
+
+它是什么:一个 StationBase 子类,【自带模型桌子】,整件摆在场景里。
+
+结构:
+- 根:ContainerBase(容量小,比如 3)+ PlacementBlocker + 碰撞体
+
+行为:
+- 【免费但慢速自补】:每 _refillSeconds(默认 8 秒)往容器里加一份,加到上限为止
+- 短按 E、双手为空 → 从容器取一份,生成实物【到手里】:
+    !NetworkGrabbable.IsHeldBy(manager, conn.ClientId) 判定双手为空
+    → GrabbableSpawner.SpawnGrabbable(payload, player.HandPosition, rot, conn)
+    → player.ServerHandToPlayer(nob)
+  两步缺一不可,见 CONSTRAINTS.md 第二节末尾
+- 容器空了 → 什么都不做(不报错、不生成)
+- 手上已经有东西 → 什么都不做
+
+自补用【服务端计时】,放在 TimeManager_OnUpdate 里累加 Time.unscaledDeltaTime。
+不要用协程,也不要用 InvokeRepeating —— 见 CONSTRAINTS.md 第 6 条。
+
+为什么免费:材料经济不用钱,用时间。慢速自补 = 真正的货币是「跑一趟的时间」,
+而且结构上不可能死锁。指标是单调分数,永远不可花。
+
+验收:
+- 按 E → 手里多一个物体,容器少一份
+- 手上有东西时按 E → 什么都不发生
+- 容器空了按 E → 什么都不发生
+- 自补按设定的速率进行
+- 两个玩家同时取 → 都拿到,不重复生成
+```
 
 ---
 
-# 附:核心窗口接下来写什么
+# 附:P0.1 已完成
 
-**P0.1 · 工位交互接缝** —— W1/W2 的前置:
+`Stations/StationBase.cs` 与 `PlayerInteraction` 的交互通道都已落地,签名见 `CONSTRAINTS.md` 第二节末尾。
+W1/W2 可以直接开工。
 
-- `Assets/Scripts/Stations/StationBase.cs`(新建):抽象 `NetworkBehaviour`,一个 `ServerInteract(PlayerInteraction player, NetworkConnection conn, bool longPress)`
-- `Assets/Scripts/Interaction/PlayerInteraction.cs`(修改,归核心):加一个通用交互 RPC,以及 E 键在「抓取没命中」时回退到工位
+**接下来由核心窗口负责的:**
 
-**为什么必须由核心写**:`ServerRpc` 不能声明在无主的场景物件上(硬约束 #4),所以从玩家到工位的转发**只能**落在 `PlayerInteraction`。这个文件如果让 W1 和 W2 各改一次,必然冲突;而且两个窗口会各自发明一套转发。
+- 数据层与 NPC(客户 / 同事 / BOSS)、文件夹、章笔、电脑面板 —— 下一轮,依赖还没定
+- Steam 传输真机联机

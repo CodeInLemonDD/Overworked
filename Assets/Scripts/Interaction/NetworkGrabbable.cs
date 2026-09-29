@@ -687,6 +687,37 @@ namespace Overworked.Interaction
         }
 
         /// <summary>
+        /// Server: true when the given connection is holding anything.
+        /// </summary>
+        /// <remarks>
+        /// Derived from the objects themselves for the same reason as <see cref="IsCellOccupied"/>:
+        /// there is no per-player carry flag on the server, and a second copy of that answer would
+        /// be one more thing to keep in step. Stations use this for "hands empty", which is a
+        /// condition several of them share and none of them should be re-deriving.
+        ///
+        /// This only reads the collection, so unlike a despawn pass it needs no snapshot first.
+        /// </remarks>
+        public static bool IsHeldBy(NetworkManager manager, int clientId)
+        {
+            if (manager == null || clientId < 0)
+                return false;
+
+            foreach (NetworkObject spawned in manager.ServerManager.Objects.Spawned.Values)
+            {
+                if (spawned == null)
+                    continue;
+
+                NetworkGrabbable grabbable = spawned.GetComponent<NetworkGrabbable>();
+                if (grabbable == null)
+                    continue;
+                if (grabbable.State == GrabbableState.Held && grabbable.HolderId == clientId)
+                    return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>
         /// Server: marks this object as held by a connection.
         /// </summary>
         [Server]
