@@ -115,3 +115,6 @@ InitTestScene*.unity*
 
 # Local build output (Unity Build Profiles drops here)
 /[Rr]elease/
+
+# Local scratch files
+[Cc]laude.txt
