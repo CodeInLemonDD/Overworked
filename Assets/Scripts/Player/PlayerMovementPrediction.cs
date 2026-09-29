@@ -27,9 +27,10 @@ namespace Overworked.Player
         /// </summary>
         public struct ReplicateData : IReplicateData
         {
-            public ReplicateData(Vector2 input)
+            public ReplicateData(Vector2 input, float speedMultiplier)
             {
                 Input = input;
+                SpeedMultiplier = speedMultiplier;
                 _tick = 0;
             }
 
@@ -37,6 +38,23 @@ namespace Overworked.Player
             /// Movement direction held this tick, in the XZ plane.
             /// </summary>
             public Vector2 Input;
+
+            /// <summary>
+            /// Fraction of the normal move rate to apply this tick; 0.3 to 1.
+            /// </summary>
+            /// <remarks>
+            /// Carried here rather than read from PlayerStamina inside the replicate method.
+            /// A replicate is re-run verbatim when the owner is rolled back, so anything it
+            /// reads live would be the current frame's value applied to a tick from the past:
+            /// the server and the owner would then walk different distances for that tick and
+            /// the character would visibly snap back and forth. Travelling with the input
+            /// keeps the value attached to the tick it belongs to.
+            ///
+            /// Must be public — the weaver only serializes public fields, and a private one
+            /// would compile and then silently never leave this machine. The same reason
+            /// rules out a property.
+            /// </remarks>
+            public float SpeedMultiplier;
 
             /// <summary>
             /// Tick is set at runtime. There is no need to manually assign this value.
@@ -148,6 +166,17 @@ namespace Overworked.Player
         private InputAction _moveAction;
 
         /// <summary>
+        /// Source of the per-tick speed multiplier. Optional.
+        /// </summary>
+        /// <remarks>
+        /// Resolved by component rather than through an Inspector field, so putting the
+        /// component on the prefab is the whole of the wiring. Missing is not an error: the
+        /// player simply never slows down, which is how this class behaved before stamina
+        /// existed.
+        /// </remarks>
+        private PlayerStamina _stamina;
+
+        /// <summary>
         /// Reference to the CharacterController component.
         /// </summary>
         private CharacterController _characterController;
@@ -170,12 +199,19 @@ namespace Overworked.Player
         private void Awake()
         {
             _characterController = GetComponent<CharacterController>();
+            _stamina = GetComponent<PlayerStamina>();
             SetTickCallbacks(TickCallback.Tick | TickCallback.PostTick);
         }
 
         public override void OnStartNetwork()
         {
             base.OnStartNetwork();
+
+            /* Warned about rather than defaulted silently: without it the speed multiplier
+             * stays at 1 forever, which looks exactly like a stamina system that is not
+             * working, and there is nothing on screen to say which of the two it is. */
+            if (_stamina == null)
+                Debug.LogWarning($"{nameof(PlayerMovementPrediction)} on {gameObject.name} has no {nameof(PlayerStamina)}; the player will never slow down.", this);
 
             if (_inputActions == null)
             {
@@ -274,7 +310,13 @@ namespace Overworked.Player
 
             // Sampled on the tick, not per-frame: replicate is tick driven.
             Vector2 move = _moveAction != null ? _moveAction.ReadValue<Vector2>() : Vector2.zero;
-            return new ReplicateData(move);
+
+            /* Sampled on the tick as well, and for the same reason: the value that goes out
+             * has to be the one that belongs to this tick, not one read back later during a
+             * replay. With no stamina component this is a constant 1. */
+            float speedMultiplier = _stamina != null ? _stamina.SpeedMultiplier : 1f;
+
+            return new ReplicateData(move, speedMultiplier);
         }
 
         /// <summary>
@@ -360,7 +402,9 @@ namespace Overworked.Player
                     _yaw = Mathf.MoveTowardsAngle(_yaw, targetYaw, _rotationRate * delta);
                     transform.localRotation = Quaternion.Euler(0f, _yaw, 0f);
 
-                    forces = direction * _moveRate;
+                    /* Fatigue slows the walk, not the turn: a tired player who also turned
+                     * like a barge would be fighting the camera as well as the clock. */
+                    forces = direction * (_moveRate * ResolveSpeedMultiplier(rd.SpeedMultiplier));
                 }
                 else
                 {
@@ -377,6 +421,27 @@ namespace Overworked.Player
              * character clear of the ground; with no jump we need it. */
             if (!useDefaultForces && _characterController.isGrounded && _verticalVelocity < 0f)
                 _verticalVelocity = -1f;
+        }
+
+        /// <summary>
+        /// Clamps a speed multiplier arriving from the network into the range this component
+        /// is willing to move at.
+        /// </summary>
+        /// <remarks>
+        /// Runs on every replay, so it doubles as the guard against a malformed value. A
+        /// multiplier of zero — which is exactly what a default ReplicateData carries, and
+        /// that is what a non-owner builds — or a NaN would otherwise freeze the character,
+        /// and anything above 1 would let a modified client outrun everyone.
+        /// </remarks>
+        private static float ResolveSpeedMultiplier(float value)
+        {
+            /* Written as a positive test on purpose: NaN compares false against everything,
+             * so a missing or malformed value and a zero both land in this branch instead of
+             * needing a separate case. */
+            if (!(value > 0f) || value > 1f)
+                return 1f;
+
+            return Mathf.Max(value, PlayerStamina.MinSpeedMultiplier);
         }
 
         [Reconcile]

@@ -29,6 +29,15 @@ namespace Overworked.Interaction
         private float _raycastDistance = 3f;
 
         /// <summary>
+        /// Whether objects may be placed on this surface at all.
+        /// </summary>
+        [Tooltip("Off = this whole surface refuses placement. For a table that is scenery or " +
+                 "otherwise out of play; to block a single occupied cell, put a PlacementBlocker " +
+                 "on the object standing there instead.")]
+        [SerializeField]
+        private bool _acceptsObjects = true;
+
+        /// <summary>
         /// Minimum Y of the surface normal for a hit to count as a top face.
         /// </summary>
         public float MinSurfaceNormalY => _minSurfaceNormalY;
@@ -39,10 +48,46 @@ namespace Overworked.Interaction
         public float RaycastDistance => _raycastDistance;
 
         /// <summary>
+        /// Whether objects may be placed on this surface at all.
+        /// </summary>
+        public bool AcceptsObjects => _acceptsObjects;
+
+        /// <summary>
         /// Returns true when the given collider belongs to this surface.
         /// </summary>
         public bool Owns(Collider candidate) =>
             candidate != null && candidate.transform.IsChildOf(transform);
+
+        /// <summary>
+        /// Returns true when a hit on the given collider must not be treated as this surface.
+        /// </summary>
+        /// <remarks>
+        /// Ownership alone is not enough to call a hit placeable. A fixed prop standing on a table
+        /// is parented to the table, so it is "owned" by the same SnapSurface as the tabletop and
+        /// answers with its own top face as the surface height — which is how objects used to get
+        /// yanked up onto whatever was standing on the table. A machine sitting in a cell is the
+        /// same shape of problem.
+        ///
+        /// The hit cannot tell itself apart from the tabletop, so anything on the path from the
+        /// hit up to this surface that carries a <see cref="PlacementBlocker"/> blocks it. The
+        /// walk covers this surface's own transform too, so a blocker on the root that holds both
+        /// the collider and the SnapSurface blocks as well.
+        /// </remarks>
+        private bool IsBlocked(Collider candidate)
+        {
+            if (!_acceptsObjects)
+                return true;
+
+            for (Transform t = candidate.transform; t != null; t = t.parent)
+            {
+                if (t.GetComponent<PlacementBlocker>() != null)
+                    return true;
+                if (t == transform)
+                    break;
+            }
+
+            return false;
+        }
 
         /// <summary>
         /// Casts down at the given XZ and reports the surface height, but only if the hit is
@@ -62,6 +107,8 @@ namespace Overworked.Interaction
             if (!TryRaycastDown(origin, distance, ignore, out RaycastHit hit))
                 return false;
             if (!Owns(hit.collider))
+                return false;
+            if (IsBlocked(hit.collider))
                 return false;
             if (hit.normal.y < _minSurfaceNormalY)
                 return false;
@@ -98,6 +145,15 @@ namespace Overworked.Interaction
             if (surface == null)
                 return false;
             if (hit.normal.y < surface.MinSurfaceNormalY)
+            {
+                surface = null;
+                return false;
+            }
+
+            /* Checked here rather than only at the call sites: stations pick their candidate
+             * cells through this method, and a cell that is refused on one path but accepted on
+             * the other is exactly how a machine ends up with objects stacked on top of it. */
+            if (surface.IsBlocked(hit.collider))
             {
                 surface = null;
                 return false;
