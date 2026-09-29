@@ -43,6 +43,10 @@
 | 9 | **`NetworkObject.NetworkBehaviours: []` 是无害残留** —— 运行时按层级+组件顺序重建,发包走运行时属性。**往 prefab 加组件不需要 Editor 刷新** | `NetworkObject.cs:1002-1032`;`NetworkBehaviour.SyncTypes.cs:502` |
 | 10 | **`SyncList` 类型参数可以是自定义 struct**,但**字段必须 public** —— private / `[SerializeField] private` 会被 weaver **静默跳过**(编译通过、运行不同步)。也不能有 public 属性(有 get+set 会被一起序列化) | `SyncTypeProcessor.cs:399-437`;`TypeDefinitionExtensions.cs:31-62` |
 | 11 | **Scene 物件 `Despawn()` 退化成 `SetActive(false)`**,没有恢复路径。**永远不要 despawn 场景物件** | `ManagedObjects.cs:430-434` |
+| 12 | **`InstanceFinder.IsServer` 是 `[Obsolete]`** —— 用 `IsServerStarted`。行为完全一样(源码里就是 `IsServer => IsServerStarted`),换掉纯粹是消警告 | CS0618 |
+| 13 | **`TimeManager.OnUpdate` 跑在 tick 【之前】** —— 默认 `_updateOrder = BeforeTick`,而 `TickUpdate()` 每帧只调一次 `OnUpdate`。「每帧一次」成立,「在 tick 之后」**不成立** | `TimeManager.cs:158, 366-385` |
+| 14 | **`NetworkBehaviour` 上的 `OnValidate` 必须 `override`,不能隐藏。** 基类是 `protected virtual` 且会调 `TryAddNetworkObject()`(编辑器里自动解析 NetworkObject 引用);写成 `private void OnValidate()` 会**静默停掉它**。weaver **不**接管 `OnValidate`,所以没有「它自会处理」这回事 | `NetworkBehaviour.cs:206-214` |
+| 15 | **`Awake()` 的 CS0114 是本项目基线,不要"修"。** weaver 把用户的 `Awake` 改名成 `Awake_UserLogic_*` 再生成一个真正的 `Awake` 串起网络初始化 —— 所以 `TickNetworkBehaviour` 子类里就是写 `private void Awake()`,不要改成 `override` | `NetworkBehaviourHelper.cs:73` |
 
 ### 项目层面
 
@@ -200,6 +204,55 @@ public static bool IsHeldBy(NetworkManager manager, int clientId);   // 服务�
 - `CmdDropObject` 与 `CmdNotifyThrown` 都检查 `Held` → 全被拒 → **东西永远卡在手里**
 
 **交互的动词是 `bool longPress`**(按住 ≥ 0.3 秒为 true),在**松手时**发出。不关心长短按的工位忽略它即可。玩家按 E 时**抓取优先**,抓不到才轮到工位 —— 所以工位摆在桌子旁边不会让桌上的东西变得捡不起来。
+
+### `PlacementBlocker`(空标记 MonoBehaviour)—— W3
+
+**用途**:给「站在某一格里的固定物件」挂上,那一格不再接受放置。机器(打印机、原料箱)也算固定物件。
+
+**为什么需要它**:探测射线从上往下打,命中物若是桌子的子节点,`GetComponentInParent<SnapSurface>()` 会**顺着往上找到桌子的 `SnapSurface`** —— 于是物体顶面被当成桌面高度,物体被吸到它上面。命中本身分不清「这是桌面」和「这是站在桌面上的东西」,所以由占位者自己声明,拒在 `SnapSurface.IsBlocked()` 里。
+
+**布置规则(硬性,违反会静默失效)**:
+
+> **`PlacementBlocker` 必须挂在它所占据的那个碰撞体所在节点,或该节点与 `SnapSurface` 之间的任一祖先上。**
+> 挂在没有碰撞体的纯视觉子节点上 → 无效。
+> 挂在 `SnapSurface` **之上**(标记挂机器根、`SnapSurface` 挂子节点「桌面」) → **无效,原 bug 原样复现**。
+
+走查从命中碰撞体往上走,**走到 `SnapSurface` 所在节点就停**。这是为了保住「大桌子 + 机器只占一格」这种摆法(机器挂 blocker、桌子挂 `SnapSurface`、机器是桌子的子节点)。
+
+### Payload 索引契约 —— 必须定死
+
+`PayloadCatalogue` 的**数组顺序就是契约**,索引在任何地方含义相同。**只能追加,不能重排** —— 重排会改变世界里所有已存在物体和所有已配置字段的含义。
+
+**所有需要索引的地方必须填同一个数**:
+
+| 位置 | 字段 |
+|---|---|
+| `PaperBox` | `_payloadIndex`(盒子吐出的东西) |
+| `Printer` | 纸索引 / 墨索引 / 产物索引 |
+| `Object.prefab` | `NetworkGrabbable._catalogue` |
+| 各 `ContainerView` | `_catalogue` |
+| `DebugHud` | `_catalogue`(可选,不指就显示 `payload N`) |
+
+**没有任何代码层的地方定义「0 是纸」。** 填错的表现是「箱子吐出墨盒」或「打印机不认纸」,而且**要跑起来才发现**,编译期零提示。HUD 是最便宜的验证工具:台面上显示 `纸 x3` 说明索引通了,显示 `payload 0 x3` 说明没通。
+
+### 进料型工位没有主动动词 —— 只能靠物理投喂
+
+**这是接口层面的事实,不是某个工位的实现细节**:
+
+- `PlayerInteraction` 里 E 在**持物时**只走放下/投掷;
+- 工位目标只在**没抓到东西**时才会被设置。
+
+所以「拿着纸走到机器前按 E 递给它」**在现有接口下不可能发生**。进料型工位(打印机、将来的「插 U 盘」「放文件」)必须自己盯一个区域,靠物体**落进那个区域**触发。
+
+**推论**:每个进料工位都要自己实现「区域判定 + 拒绝时把东西留在世界上」。第三个出现时应该抽成组件,别各写一遍。
+
+### 只进不出的容器:容量必须无限,否则必须给取回动词 —— W1
+
+输入容器(塞进去办正事的那些)**没有任何取回途径**。所以它一旦容量有限,玩家就能用一个**合法操作**把机器永久卡死:塞满同一种原料 → 缺的那一种进不来 → 配方永远凑不齐 → 而机器从不退还输入。
+
+打印机为此把纸和墨拆成了**两个独立容器**(纸 6 / 墨 1 盒),因为**生命周期不同的资源不该共用一个容器**:纸是「一张一用」,墨是「一盒 8 张」,塞进同一个槽位模型就长出了「纸满了装不进墨」这种荒谬的失败模式。
+
+**这条对将来的文件夹、章笔座、任何「收进去办事」的容器同样成立。**
 
 ---
 

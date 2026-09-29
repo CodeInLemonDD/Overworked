@@ -126,13 +126,20 @@ git clone <this repository>
 | Prototype | Core movement | **Done** |
 | Prototype | Networking (local, Tugboat + Multiplayer Play Mode) | **Done** |
 | Prototype | Object interaction — grab, carry, place, throw, grid snapping | **Done** |
-| Prototype | Basic task system | Not started |
+| Prototype | Stations — container model, printer, paper box | **Done** |
+| Prototype | Task system | **Redesigned** — see below |
 | Alpha | 4-player online multiplayer, item system, 3 office maps | Planned |
 | Beta | Full task variety, advanced physics interactions, Steam integration | Planned |
 | Release | Steam store launch, achievements, community features | Planned |
 
 Local play works today with the default Tugboat transport. Steam transport is wired in but
 has never been exercised end to end — it needs a real AppID and two Steam accounts.
+
+**The task system was reshaped partway through.** A task is now an **NPC's request** — a
+customer wanting a contract, a colleague wanting a report — rather than carrying a block to a
+marked grid cell. The round is meant to be driven by a production chain (computer, printer,
+folder) instead. The delivery-to-a-cell loop was dropped, so the rows above describe what was
+built rather than what was originally planned.
 
 ---
 
