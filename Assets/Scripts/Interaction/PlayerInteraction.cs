@@ -905,6 +905,13 @@ namespace Overworked.Interaction
         /// anything generated straight into someone's hands — a box handing out a sheet, a printer
         /// handing over a finished document — and it is deliberately not the pickup path: there is
         /// nothing on the ground to request, so the client cannot start the carry itself.
+        ///
+        /// Marking the object held is part of this, not a step for the caller to remember. A
+        /// freshly spawned object is Idle with no holder, and every server-side rule reads that
+        /// copy rather than the client's: "hands empty" would never become false and a second
+        /// request would be served, the carried object would keep its colliders and be captured
+        /// onto grid cells as it was walked around, and both the drop and the throw check for Held
+        /// and would refuse — leaving it stuck in the player's hands for good.
         /// </remarks>
         [Server]
         public void ServerHandToPlayer(NetworkObject target)
@@ -913,6 +920,10 @@ namespace Overworked.Interaction
                 return;
             if (!Owner.IsValid)
                 return;
+
+            NetworkGrabbable grabbable = target.GetComponent<NetworkGrabbable>();
+            if (grabbable != null)
+                grabbable.ServerSetHeld(Owner.ClientId);
 
             RpcHandToPlayer(Owner, target);
         }

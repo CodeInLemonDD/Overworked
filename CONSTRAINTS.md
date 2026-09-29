@@ -183,11 +183,21 @@ public static bool IsHeldBy(NetworkManager manager, int clientId);   // 服务�
 
 **「双手为空」一律用 `!NetworkGrabbable.IsHeldBy(manager, conn.ClientId)`。** 服务端没有现成的携带标志,这个静态是唯一正确实现 —— 不要在别处重写一份。
 
-**往玩家手里生成物体的两步(缺一不可)**:
-1. `GrabbableSpawner.SpawnGrabbable(payload, player.HandPosition, rot, conn)` —— 所有权直接给该玩家
-2. `player.ServerHandToPlayer(nob)` —— 让客户端开始持有
+**往玩家手里生成物体:两步,顺序固定。**
+
+1. `GrabbableSpawner.SpawnGrabbable(payload, player.HandPosition, rot, conn)` —— 生成,并把所有权给该玩家
+2. `player.ServerHandToPlayer(nob)` —— **标记为持有** + 让客户端开始持有
 
 只做第一步物体掉在地上;只做第二步没有物体。
+
+**第 2 步里已经包含「标记为持有」,调用者不要再自己调 `ServerSetHeld`。**
+
+这一条原本写在调用方,结果打印机和原料箱两个窗口各自踩了一遍才补上。原因是:物体生成出来是 `Idle` 且**无持有者**,
+而**所有服务端规则读的是这份状态**,不是客户端那份。漏掉的后果是三条同时发生 ——
+
+- 「双手为空」(`IsHeldBy`)永远为真 → 能重复领第二份
+- 手上的物体碰撞体没关 → 会被网格吸附到格子上
+- `CmdDropObject` 与 `CmdNotifyThrown` 都检查 `Held` → 全被拒 → **东西永远卡在手里**
 
 **交互的动词是 `bool longPress`**(按住 ≥ 0.3 秒为 true),在**松手时**发出。不关心长短按的工位忽略它即可。玩家按 E 时**抓取优先**,抓不到才轮到工位 —— 所以工位摆在桌子旁边不会让桌上的东西变得捡不起来。
 
