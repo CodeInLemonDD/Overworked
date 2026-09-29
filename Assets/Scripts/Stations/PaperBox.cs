@@ -221,9 +221,10 @@ namespace Overworked.Stations
         /// not a different request, and answering it with nothing would read as the station having
         /// stopped responding.
         ///
-        /// Nobody owns the stock — an entry is added with no owner — because the box's contents
-        /// are the box's, not a player's. Which player a sheet counts for is decided when it is
-        /// fed into a machine, not when it is picked up here.
+        /// Nobody owns the stock, and nothing downstream will either: paper is a shared pool,
+        /// the same sheet whoever carried it to the machine, and feeding one in scores nothing.
+        /// Ownership is a property of a finished document, which arrives from the computer
+        /// already carrying a faction — not of the material that goes into the machine.
         /// </remarks>
         protected override void OnServerInteract(PlayerInteraction player, NetworkConnection conn, bool longPress)
         {

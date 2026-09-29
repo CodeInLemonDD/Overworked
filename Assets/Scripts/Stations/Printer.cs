@@ -10,14 +10,12 @@ using UnityEngine;
 namespace Overworked.Stations
 {
     /// <summary>
-    /// Turns paper and ink into printed sheets, and shares its output time between the players
-    /// who fed it.
+    /// Turns paper and ink into printed sheets.
     /// </summary>
     /// <remarks>
     /// A machine standing in a cell, not furniture with a machine on it. The table that comes
-    /// with the prefab is scenery; the machine's own root carries the input container, the
-    /// placement blocker and the collider, and the Output child carries the second container
-    /// and its view.
+    /// with the prefab is scenery; the machine's own root carries the paper slot, the placement
+    /// blocker and the collider, and its children carry the ink slot, the output and the views.
     ///
     /// Input arrives physically. There is no press that hands a station something — E with full
     /// hands is drop or throw, and the interaction never reaches a station while carrying — so
@@ -26,11 +24,16 @@ namespace Overworked.Stations
     /// the same reason: a machine is wider than one cell, and an item is released at arm's
     /// length in front of the player rather than at their feet.
     ///
-    /// Who fed an item travels in the entry as OwnerClientId, because it cannot be recovered
-    /// later. A grabbable clears its holder the moment it comes to rest, so the drop is the
-    /// last point at which anything knows. An item still owned by its thrower is credited from
-    /// that; anything the machine saw someone carrying it remembers for a while, so an item
-    /// that had to wait on a full machine still reaches the right queue.
+    /// Paper and ink are a public pool and belong to nobody. Whoever carried a sheet over, the
+    /// next sheet made uses it, so there is no queue to keep in order and nobody to rotate. The
+    /// faction rotation this machine will need belongs one level up, to the documents that come
+    /// out of it, and it arrives with the file queue: the algorithm written for it is in
+    /// PrinterQueue's git history, waiting for that, and is deliberately not kept here as dead
+    /// code in the meantime. Until the data layer exists, one player is enough to run it.
+    ///
+    /// Ink is spent by the sheet rather than consumed as an item. A cartridge is a count living
+    /// in the ink slot until it runs dry, and it is the slot being full that stops a second one
+    /// going in — "a cartridge cannot be swapped before it is used up" needs no rule of its own.
     ///
     /// Making a sheet is not replicated. The progress is a server-side timer, and the only
     /// state other peers hold is the output container, which is a SyncList like any other.
@@ -38,14 +41,48 @@ namespace Overworked.Stations
     [DisallowMultipleComponent]
     public class Printer : StationBase
     {
+        /// <summary>
+        /// Sheets of paper the machine is built to hold.
+        /// </summary>
+        /// <remarks>
+        /// Nothing enforces this — the container refuses paper on its own capacity — but the
+        /// machine is designed around the number and says so when the prefab disagrees.
+        /// </remarks>
+        private const int PaperCapacity = 6;
+
+        /// <summary>
+        /// Cartridges the ink slot is built to hold.
+        /// </summary>
+        private const int InkCapacity = 1;
+
         [Header("Containers")]
 
         /// <summary>
-        /// The input container on this object: what players have fed in.
+        /// The paper slot on this object.
         /// </summary>
-        [Tooltip("The input container on this object: the paper and ink players have fed in.")]
+        /// <remarks>
+        /// Public stock rather than a queue. Whoever puts paper in, the next sheet takes it:
+        /// paper is a shared resource and carries nobody's name, so there is nothing to
+        /// ration and nobody to rotate. Its own container, separate from the ink, because a
+        /// machine with six sheets of paper in it and no ink must still be able to take a
+        /// cartridge — one full slot must never block the other.
+        /// </remarks>
+        [Tooltip("The paper slot. Capacity 6. Full means paper is refused, not that the machine stops.")]
         [SerializeField]
-        private ContainerBase _input;
+        private ContainerBase _paper;
+
+        /// <summary>
+        /// The ink slot on this object.
+        /// </summary>
+        /// <remarks>
+        /// One cartridge, and the cartridge is a count rather than an item: it stays in the
+        /// slot until it runs dry, then disappears and frees the slot for the next one. That
+        /// the slot is full while a cartridge is in it is the whole of "a cartridge cannot be
+        /// swapped before it is used up" — no rule has to be written for it.
+        /// </remarks>
+        [Tooltip("The ink slot. Capacity 1: one cartridge, which stays until it runs dry.")]
+        [SerializeField]
+        private ContainerBase _ink;
 
         /// <summary>
         /// The output container on the Output child: printed sheets waiting to be taken.
@@ -89,6 +126,22 @@ namespace Overworked.Stations
         [SerializeField]
         private float _secondsPerOutput = 3f;
 
+        [Header("Ink")]
+
+        /// <summary>
+        /// Sheets one cartridge is good for.
+        /// </summary>
+        /// <remarks>
+        /// Ink is spent by the sheet, not consumed as an item, because a cartridge is not one
+        /// sheet's worth of anything — it is a battery. Modelling it as six separate ink items
+        /// would mean six trips to the box and six entries competing for a slot, for a resource
+        /// whose only interesting property is how long it lasts.
+        /// </remarks>
+        [Tooltip("Sheets one cartridge is good for.")]
+        [Min(1)]
+        [SerializeField]
+        private int _printsPerCartridge = 8;
+
         [Header("Intake")]
 
         /// <summary>
@@ -110,19 +163,6 @@ namespace Overworked.Stations
         [SerializeField]
         private Vector3 _intakeHalfExtents = new(0.8f, 0.8f, 0.8f);
 
-        /// <summary>
-        /// How far past the intake box the machine keeps watching what a player is carrying.
-        /// </summary>
-        /// <remarks>
-        /// This is what credits the feeder. The player drops an item from outside the box as
-        /// often as into it, and by the time it has been swallowed the item no longer knows who
-        /// was holding it — so the machine has to have noticed earlier, while it still did.
-        /// </remarks>
-        [Tooltip("How far past the intake box the machine keeps watching what a player is carrying, so a missed drop can still be credited.")]
-        [Min(0f)]
-        [SerializeField]
-        private float _feederTrackMargin = 1.5f;
-
         [Header("Power")]
 
         /// <summary>
@@ -133,30 +173,9 @@ namespace Overworked.Stations
         private bool _isPowered = true;
 
         /// <summary>
-        /// Per-faction rotation over the input container.
-        /// </summary>
-        private readonly PrinterQueue _queue = new();
-
-        /// <summary>
-        /// Server-only: who the machine last saw carrying each item near it.
-        /// </summary>
-        /// <remarks>
-        /// Bounded by the tracking box, not by the whole scene: entries are dropped as objects
-        /// leave the box, and again when they are destroyed. It exists only because the
-        /// grabbable forgets its holder on release, and an item that had to wait for room would
-        /// otherwise arrive with no owner and land in no one's queue.
-        /// </remarks>
-        private readonly Dictionary<NetworkGrabbable, int> _feeders = new();
-
-        /// <summary>
         /// Reused by the intake scan. See <see cref="GrabbableSpawner.CollectSpawnedGrabbables"/>.
         /// </summary>
         private readonly List<NetworkGrabbable> _scanBuffer = new();
-
-        /// <summary>
-        /// Reused when pruning <see cref="_feeders"/>.
-        /// </summary>
-        private readonly List<NetworkGrabbable> _staleFeeders = new();
 
         /// <summary>
         /// The TimeManager this object subscribed to.
@@ -174,9 +193,16 @@ namespace Overworked.Stations
         private float _craftSeconds;
 
         /// <summary>
-        /// Server-only: the client whose job is being made, or -1.
+        /// Server-only: sheets the cartridge in the ink slot still has in it.
         /// </summary>
-        private int _craftOwnerClientId = -1;
+        /// <remarks>
+        /// Derived from the slot rather than tracked beside it: zero while the slot is empty,
+        /// refilled to <see cref="_printsPerCartridge"/> when a cartridge goes in, spent one
+        /// sheet at a time, and the cartridge leaves the slot the moment it reaches zero. The
+        /// slot and this number are never allowed to disagree about whether there is ink,
+        /// because the only two places that change one change the other.
+        /// </remarks>
+        private int _printsRemaining;
 
         /// <summary>
         /// Whether the machine is running.
@@ -193,49 +219,11 @@ namespace Overworked.Stations
         [Server]
         public void ServerSetPowered(bool powered) => _isPowered = powered;
 
-        /// <summary>
-        /// Smallest input capacity that can hold two players' jobs at once.
-        /// </summary>
-        /// <remarks>
-        /// Two entries per job, and the rotation only means anything while two owners can be
-        /// queued together. See the warning in <see cref="OnStartServer"/> for what a smaller
-        /// one does.
-        /// </remarks>
-        private const int TwoJobCapacity = 4;
-
         public override void OnStartServer()
         {
             base.OnStartServer();
 
-            if (_input == null || _output == null)
-            {
-                Debug.LogError(
-                    $"{nameof(Printer)} on {gameObject.name} is missing its input or output container and will do nothing.",
-                    this);
-            }
-            else if (_input == _output)
-            {
-                Debug.LogError(
-                    $"{nameof(Printer)} on {gameObject.name} has the same container wired as both input and output.",
-                    this);
-            }
-            else if (!_input.IsUnlimited && _input.Capacity < TwoJobCapacity)
-            {
-                /* Worth shouting about, because the failure is permanent and looks like a bug
-                 * in the machine rather than in the prefab. Nothing takes an item back out of
-                 * the input — the machine only ever hands sheets out of the output — so a
-                 * player who fills a small input with one kind of item leaves no room for the
-                 * other kind, and the machine never runs again. An unlimited input cannot be
-                 * filled, so it cannot get stuck; that is the intended wiring. */
-                Debug.LogWarning(
-                    $"{nameof(Printer)} on {gameObject.name} has an input capacity of {_input.Capacity}; " +
-                    $"below {TwoJobCapacity} a single player can fill it with paper and stall the machine for good. " +
-                    "Make the input container unlimited.",
-                    this);
-            }
-
-            _queue.Reset();
-            _feeders.Clear();
+            ValidateConfiguration();
 
             /* Subscribed by hand rather than through TickNetworkBehaviour, which is where this
              * hook normally comes from: a station has to stay a plain NetworkBehaviour, and the
@@ -254,10 +242,56 @@ namespace Overworked.Stations
                 _timeManager = null;
             }
 
-            _queue.Reset();
-            _feeders.Clear();
-
             base.OnStopServer();
+        }
+
+        /// <summary>
+        /// Reports wiring that would make the machine misbehave.
+        /// </summary>
+        /// <remarks>
+        /// Slots rather than unlimited containers this round, and each has a size the machine
+        /// is built around: paper is refused at six, a cartridge is the only thing that fits in
+        /// the ink slot, and a cartridge with no sheets in it makes printing impossible. None of
+        /// these stop the machine from running, so without a word here they would look like
+        /// gameplay.
+        /// </remarks>
+        private void ValidateConfiguration()
+        {
+            if (_paper == null || _ink == null || _output == null)
+            {
+                Debug.LogError(
+                    $"{nameof(Printer)} on {gameObject.name} is missing one of its containers and will do nothing.",
+                    this);
+                return;
+            }
+
+            if (_paper == _ink || _paper == _output || _ink == _output)
+            {
+                Debug.LogError(
+                    $"{nameof(Printer)} on {gameObject.name} has the same container wired to more than one slot.",
+                    this);
+            }
+
+            if (!_paper.IsUnlimited && _paper.Capacity != PaperCapacity)
+            {
+                Debug.LogWarning(
+                    $"{nameof(Printer)} on {gameObject.name} has a paper capacity of {_paper.Capacity}; it is built around {PaperCapacity}.",
+                    this);
+            }
+
+            if (!_ink.IsUnlimited && _ink.Capacity != InkCapacity)
+            {
+                Debug.LogWarning(
+                    $"{nameof(Printer)} on {gameObject.name} has an ink capacity of {_ink.Capacity}; it is built around {InkCapacity}, one cartridge.",
+                    this);
+            }
+
+            if (_printsPerCartridge <= 0)
+            {
+                Debug.LogWarning(
+                    $"{nameof(Printer)} on {gameObject.name} has a cartridge of {_printsPerCartridge} sheets, so no job can ever start.",
+                    this);
+            }
         }
 
         /// <summary>
@@ -280,13 +314,10 @@ namespace Overworked.Stations
         }
 
         /// <summary>
-        /// Server: swallows what has been dropped or thrown into the machine, and notes who is
-        /// carrying what near it.
+        /// Server: swallows the paper and cartridges lying in the intake box.
         /// </summary>
         private void UpdateIntake()
         {
-            Vector3 trackHalfExtents = _intakeHalfExtents + Vector3.one * _feederTrackMargin;
-
             /* Snapshot first. Despawning while enumerating ServerManager.Objects.Spawned throws,
              * because that collection is a live view over a Dictionary and Despawn removes the
              * key synchronously. The buffer is our own list, so removing from the world while
@@ -309,109 +340,72 @@ namespace Overworked.Stations
                 if (nob.IsSceneObject)
                     continue;
 
-                Vector3 position = grabbable.transform.position;
-
-                if (!IsInsideBox(trackHalfExtents, _intakeCentre, position))
-                {
-                    /* Out of range, so forget it. Without this the machine would keep a record
-                     * for every object ever carried past it. */
-                    _feeders.Remove(grabbable);
-                    continue;
-                }
-
+                /* Anything still in someone's hands is left where it is. This is the whole of
+                 * the rule that stops the machine taking a cartridge off a player who is merely
+                 * walking past it, and it is why the box does not have to be small. */
                 if (grabbable.State == GrabbableState.Held)
-                {
-                    if (grabbable.HolderId >= 0)
-                        _feeders[grabbable] = grabbable.HolderId;
-
                     continue;
-                }
 
-                TrySwallow(grabbable, position);
+                TrySwallow(grabbable, grabbable.transform.position);
             }
 
-            ForgetDestroyedFeeders();
             _scanBuffer.Clear();
         }
 
         /// <summary>
-        /// Drops feeder records for objects that are gone.
+        /// Server: puts an item into its slot if it is lying in the intake box.
         /// </summary>
         /// <remarks>
-        /// The keys are Unity objects, which compare equal to null once destroyed but stay in
-        /// the dictionary until removed. Collected first because the dictionary cannot be
-        /// edited while it is being enumerated.
+        /// Dispatched by payload, and each slot is asked about its own room. Paper and ink are
+        /// separate containers so that filling one cannot block the other: a machine holding six
+        /// sheets and no ink must still take a cartridge, and that is the case this shape exists
+        /// for. A printed sheet is neither, so feeding one back in leaves it lying on the
+        /// machine to be picked up rather than eaten and printed again.
         /// </remarks>
-        private void ForgetDestroyedFeeders()
-        {
-            if (_feeders.Count == 0)
-                return;
-
-            foreach (KeyValuePair<NetworkGrabbable, int> pair in _feeders)
-            {
-                if (pair.Key == null)
-                    _staleFeeders.Add(pair.Key);
-            }
-
-            for (int i = 0; i < _staleFeeders.Count; i++)
-                _feeders.Remove(_staleFeeders[i]);
-
-            _staleFeeders.Clear();
-        }
-
-        /// <summary>
-        /// Server: takes an item into the input container if it is in the intake box.
-        /// </summary>
         private void TrySwallow(NetworkGrabbable grabbable, Vector3 position)
         {
             if (!IsInsideBox(_intakeHalfExtents, _intakeCentre, position))
                 return;
 
             int payload = grabbable.PayloadIndex;
-            if (!IsAcceptedInput(payload))
+            if (payload < 0)
                 return;
 
-            /* No room: the item stays in the world, where its feeder can still pick it back up.
-             * It is only swallowed when the machine can actually keep it, so nothing a player
-             * paid for is ever destroyed for want of a slot. */
-            if (_input == null || _input.IsFull)
+            /* One index used for both would load paper into the ink slot and count it as a
+             * cartridge. Refusing everything is the inert answer; OnValidate says so out loud. */
+            if (_paperPayloadIndex == _inkPayloadIndex)
                 return;
 
-            if (!_input.ServerTryAdd(ContainerEntry.ForEntity(payload, ResolveFeeder(grabbable))))
+            ContainerBase slot;
+            if (payload == _paperPayloadIndex)
+                slot = _paper;
+            else if (payload == _inkPayloadIndex)
+                slot = _ink;
+            else
                 return;
 
-            _feeders.Remove(grabbable);
+            /* No room: the item stays in the world, where its owner can still pick it back up.
+             * It is only swallowed when the machine can keep it, so nothing carried here is
+             * destroyed for want of a slot — and a spare cartridge left lying on the machine
+             * while the current one is still going is exactly what the player should see. */
+            if (slot == null || slot.IsFull)
+                return;
+
+            /* OwnerClientId stays at -1 on purpose. Stock is public: paper and ink belong to
+             * nobody, and the faction rotation that used to run here belongs to the file queue
+             * instead, where each document will carry the faction that ordered it. */
+            if (!slot.ServerTryAdd(ContainerEntry.ForEntity(payload)))
+                return;
+
+            /* A cartridge that has just gone in is a full one. This is the only place the ink
+             * count rises; FinishCraft is the only place it falls. */
+            if (slot == _ink)
+                _printsRemaining = _printsPerCartridge;
 
             /* Destroy rather than pool: these objects carry per-life state — the placed cell,
              * the settle timer, the payload — that a recycled instance would bring back with
              * it. Passed explicitly so this does not depend on the prefab. */
             grabbable.NetworkObject.Despawn(DespawnType.Destroy);
-        }
-
-        /// <summary>
-        /// True when this payload is something the machine can use.
-        /// </summary>
-        /// <remarks>
-        /// A printed sheet fed back in is not an input, so it is left lying on the machine
-        /// rather than being eaten and printed again.
-        /// </remarks>
-        private bool IsAcceptedInput(int payloadIndex) =>
-            payloadIndex >= 0
-            && (payloadIndex == _paperPayloadIndex || payloadIndex == _inkPayloadIndex);
-
-        /// <summary>
-        /// Which client should be credited for an item.
-        /// </summary>
-        /// <returns>The client id, or -1 when nobody can be credited.</returns>
-        private int ResolveFeeder(NetworkGrabbable grabbable)
-        {
-            if (_feeders.TryGetValue(grabbable, out int feeder) && feeder >= 0)
-                return feeder;
-
-            /* Still owned, which is the case for anything that arrives without the machine
-             * having seen it carried — a throw from across the room, for instance. That client
-             * is also the one simulating it. */
-            return grabbable.NetworkObject.OwnerId;
         }
 
         /// <summary>
@@ -442,9 +436,6 @@ namespace Overworked.Stations
                 return;
             }
 
-            if (IsOutputBlocked())
-                return;
-
             TryBeginCraft();
         }
 
@@ -452,61 +443,67 @@ namespace Overworked.Stations
         /// True when a finished sheet would have nowhere to go.
         /// </summary>
         /// <remarks>
-        /// The output is the machine's own buffer, so a full one stalls the machine rather than
-        /// spilling onto the floor. That is also the only back-pressure there is: keeping the
-        /// machine fed and never emptying it is what the other player is up against.
+        /// The output is the machine's own buffer, so a full one stops the machine rather than
+        /// spilling onto the floor, and the sheet already finished waits inside it until there
+        /// is room. Nothing is lost while it waits; the machine simply stops taking paper.
         /// </remarks>
         private bool IsOutputBlocked() => _output == null || _output.IsFull;
 
         /// <summary>
-        /// Server: charges the next owner for a job and starts work.
+        /// Server: takes one sheet of paper and one sheet's worth of ink, and starts work.
         /// </summary>
+        /// <remarks>
+        /// Both are checked before either is taken. A job that spent the paper and then found
+        /// the cartridge empty would burn an item for nothing, which is the kind of loss a
+        /// player cannot see coming.
+        /// </remarks>
         private void TryBeginCraft()
         {
-            if (_input == null || _output == null)
+            if (_paper == null || _ink == null || _output == null)
                 return;
 
-            /* An index used for both would make the machine wait forever for a second item that
-             * can never be a different one. OnValidate says so out loud; this makes it inert
-             * rather than destructive in the meantime. */
-            if (_paperPayloadIndex < 0 || _inkPayloadIndex < 0 || _paperPayloadIndex == _inkPayloadIndex)
+            if (_paper.Count == 0 || _printsRemaining <= 0 || IsOutputBlocked())
                 return;
 
-            int owner = _queue.SelectNextOwner(_input, _paperPayloadIndex, _inkPayloadIndex);
-            if (owner < 0)
-                return;
-
-            /* Only charged once the machine is certain it can run the job, and for the whole
-             * job at once: half a recipe consumed for nothing is a loss the player cannot see
-             * coming. */
-            if (!_queue.TryConsumeJob(_input, owner, _paperPayloadIndex, _inkPayloadIndex))
+            if (!_paper.ServerTryRemoveFirst())
                 return;
 
             _crafting = true;
             _craftSeconds = 0f;
-            _craftOwnerClientId = owner;
         }
 
         /// <summary>
-        /// Server: adds the finished sheet to the output.
+        /// Server: adds the finished sheet to the output and charges it to the cartridge.
         /// </summary>
         /// <remarks>
         /// Data is not built yet, so a job is paper and ink and nothing else. When documents
-        /// exist, this is where the third requirement goes: the job only starts once the same
-        /// owner's entries also hold a ContainerEntryKind.Data, and that entry is consumed with
-        /// the other two in <see cref="PrinterQueue.TryConsumeJob"/>.
+        /// exist, this is where the third requirement goes, and where the file queue and the
+        /// faction rotation plug in: the sheet produced here will belong to whoever ordered the
+        /// document rather than to whoever carried the paper over. The rotation algorithm that
+        /// used to sit in PrinterQueue is in this file's git history, waiting for that.
         /// </remarks>
         private void FinishCraft()
         {
             /* If the output filled up while this sheet was being made, the work is kept and the
              * sheet stays in the machine until there is room. Dropping it would destroy paper
-             * and ink the player already paid. */
-            if (!_output.ServerTryAdd(ContainerEntry.ForEntity(_outputPayloadIndex, _craftOwnerClientId)))
+             * and ink the player already paid for. */
+            if (!_output.ServerTryAdd(ContainerEntry.ForEntity(_outputPayloadIndex)))
                 return;
 
             _crafting = false;
             _craftSeconds = 0f;
-            _craftOwnerClientId = -1;
+
+            /* Charged on delivery rather than on completion, so the count and the slot only ever
+             * move together. The cartridge leaves the slot the moment it is empty, which is what
+             * frees it for the next one — and, with a capacity of one, what makes "a cartridge
+             * cannot be swapped until it is used up" true without a rule of its own. */
+            _printsRemaining--;
+
+            if (_printsRemaining > 0)
+                return;
+
+            _printsRemaining = 0;
+            _ink.ServerTryRemoveFirst();
         }
 
         /// <summary>
@@ -566,8 +563,20 @@ namespace Overworked.Stations
             player.ServerHandToPlayer(nob);
         }
 
-        private void OnValidate()
+        /// <summary>
+        /// Clamps the authored values and says so when the recipe cannot work.
+        /// </summary>
+        /// <remarks>
+        /// Overridden rather than hidden. NetworkBehaviour.OnValidate is virtual and calls
+        /// TryAddNetworkObject, which is how the component finds its NetworkObject while the
+        /// prefab is being built; a plain <c>void OnValidate</c> compiles with a warning and
+        /// silently stops that from happening. Unlike Awake, the weaver does not rewrite this
+        /// one — there is nothing to take over for it.
+        /// </remarks>
+        protected override void OnValidate()
         {
+            base.OnValidate();
+
             _secondsPerOutput = Mathf.Max(0f, _secondsPerOutput);
 
             _intakeHalfExtents = new Vector3(
@@ -575,10 +584,12 @@ namespace Overworked.Stations
                 Mathf.Max(0.01f, _intakeHalfExtents.y),
                 Mathf.Max(0.01f, _intakeHalfExtents.z));
 
+            _printsPerCartridge = Mathf.Max(0, _printsPerCartridge);
+
             if (_paperPayloadIndex >= 0 && _paperPayloadIndex == _inkPayloadIndex)
             {
                 Debug.LogWarning(
-                    $"{nameof(Printer)} on {gameObject.name} uses payload {_paperPayloadIndex} for both paper and ink; no job can ever start.",
+                    $"{nameof(Printer)} on {gameObject.name} uses payload {_paperPayloadIndex} for both paper and ink; the machine will refuse both.",
                     this);
             }
         }
@@ -588,13 +599,10 @@ namespace Overworked.Stations
             Matrix4x4 previous = Gizmos.matrix;
             Gizmos.matrix = transform.localToWorldMatrix;
 
-            /* Two boxes: what is swallowed, and the larger one the machine only watches. The
-             * gap between them is the margin that credits a feeder whose item landed short. */
+            /* The box that swallows. Anything matching an accepted payload resting inside it
+             * ends up in a slot, so it is the one volume worth drawing. */
             Gizmos.color = new Color(0.3f, 0.85f, 0.5f, 0.9f);
             Gizmos.DrawWireCube(_intakeCentre, _intakeHalfExtents * 2f);
-
-            Gizmos.color = new Color(0.3f, 0.85f, 0.5f, 0.3f);
-            Gizmos.DrawWireCube(_intakeCentre, (_intakeHalfExtents + Vector3.one * _feederTrackMargin) * 2f);
 
             Gizmos.matrix = previous;
         }

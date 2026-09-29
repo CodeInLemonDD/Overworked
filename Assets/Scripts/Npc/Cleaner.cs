@@ -126,7 +126,9 @@ namespace Overworked.Npc
         {
             Patrol(Time.deltaTime);
 
-            if (!InstanceFinder.IsServer)
+            /* Gate on the started check rather than the IsServer alias: same value, but the
+             * alias is [Obsolete] in this version. */
+            if (!InstanceFinder.IsServerStarted)
                 return;
 
             _cleanTimer += Time.deltaTime;

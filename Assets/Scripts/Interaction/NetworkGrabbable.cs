@@ -252,7 +252,11 @@ namespace Overworked.Interaction
         /// </remarks>
         public void ServerSetPayload(int payloadIndex)
         {
-            if (!FishNet.InstanceFinder.IsServer)
+            /* IsServerStarted rather than IsServerInitialized, and not the [Server] attribute:
+             * that attribute compiles to an IsServerInitialized check, which is false for this
+             * object until it has been spawned. IsServer is the socket state and is true, but it
+             * is deprecated and simply forwards to this. */
+            if (!FishNet.InstanceFinder.IsServerStarted)
             {
                 Debug.LogWarning($"{nameof(ServerSetPayload)} was called on a peer that is not the server; ignored.", this);
                 return;
