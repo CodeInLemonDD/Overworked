@@ -3,6 +3,7 @@ using FishNet.Managing;
 using FishNet.Object;
 using FishNet.Object.Synchronizing;
 using FishNet.Transporting;
+using Overworked.Containers;
 using UnityEngine;
 
 namespace Overworked.Interaction
@@ -36,6 +37,22 @@ namespace Overworked.Interaction
     [RequireComponent(typeof(NetworkObject))]
     public class NetworkGrabbable : NetworkBehaviour
     {
+        [Header("Payload")]
+
+        /// <summary>
+        /// Where payload prefabs are looked up.
+        /// </summary>
+        [Tooltip("Where payload prefabs are looked up. Must be the same catalogue the container views use.")]
+        [SerializeField]
+        private PayloadCatalogue _catalogue;
+
+        /// <summary>
+        /// Parent that holds the payload. Falls back to this transform.
+        /// </summary>
+        [Tooltip("Parent that holds the payload. Falls back to this transform.")]
+        [SerializeField]
+        private Transform _payloadRoot;
+
         [Header("Geometry")]
 
         /// <summary>
@@ -114,6 +131,12 @@ namespace Overworked.Interaction
         private readonly SyncVar<byte> _state = new();
 
         /// <summary>
+        /// Which payload this object wears, or -1 for the prefab's own authored look.
+        /// Replicated as an index so every peer resolves it through the same catalogue.
+        /// </summary>
+        private readonly SyncVar<int> _payloadIndex = new(-1);
+
+        /// <summary>
         /// Server-only: the cell this object was last placed on. Not replicated; clients
         /// re-derive placement from a raycast, and only the server needs to arbitrate races.
         /// </summary>
@@ -156,6 +179,11 @@ namespace Overworked.Interaction
         public int HolderId => _holderId.Value;
 
         /// <summary>
+        /// Which payload this object wears, or -1 when it is using the prefab's authored look.
+        /// </summary>
+        public int PayloadIndex => _payloadIndex.Value;
+
+        /// <summary>
         /// Server-only: the cell this object was last placed on.
         /// </summary>
         public Vector2Int? PlacedCell => _placedCell;
@@ -191,14 +219,127 @@ namespace Overworked.Interaction
             MeasureGeometry();
         }
 
+        /// <summary>
+        /// Re-caches the colliders and re-measures everything derived from them.
+        /// </summary>
+        /// <remarks>
+        /// Awake measures once, which is only correct while the colliders never change. A
+        /// payload swap replaces them, so the bottom offset, the collider size and the held
+        /// collider set all have to be redone together — otherwise placement lands at the
+        /// old height and the held object keeps colliding with things.
+        /// </remarks>
+        public void RefreshGeometry()
+        {
+            _colliders = GetComponentsInChildren<Collider>(includeInactive: true);
+
+            MeasureGeometry();
+            ApplyColliderState();
+        }
+
+        /// <summary>
+        /// Server: chooses which payload this object wears.
+        /// </summary>
+        /// <remarks>
+        /// Deliberately not marked [Server]. That attribute compiles down to a check on
+        /// IsServerInitialized, which is false between GetPooledInstantiated and Spawn —
+        /// exactly the window this has to be callable in. The payload has to travel in the
+        /// spawn message, because applying it later means the swap happens to an object that
+        /// is already moving, and re-measuring the geometry briefly moves the transform to
+        /// the origin to measure it. That is harmless at spawn and visible mid-flight.
+        ///
+        /// Set this before spawning. Every peer applies it as it spawns, because
+        /// SyncVar.OnChange does not fire for the initial value.
+        /// </remarks>
+        public void ServerSetPayload(int payloadIndex)
+        {
+            if (!FishNet.InstanceFinder.IsServer)
+            {
+                Debug.LogWarning($"{nameof(ServerSetPayload)} was called on a peer that is not the server; ignored.", this);
+                return;
+            }
+
+            _payloadIndex.Value = payloadIndex;
+        }
+
+        /// <summary>
+        /// Attaches the payload named by the current index, on every peer.
+        /// </summary>
+        /// <remarks>
+        /// Index -1 leaves the prefab exactly as authored, which is what objects spawn as
+        /// until something asks for a particular look. Only a real index clears the authored
+        /// children, so the default costs nothing and needs no prefab restructuring.
+        ///
+        /// This assumes a fresh instance. A pooled object would come back with its authored
+        /// children already gone and, at index -1, would keep whichever payload it wore in
+        /// its previous life — which is one of the reasons every despawn passes
+        /// DespawnType.Destroy rather than relying on the prefab's default.
+        /// </remarks>
+        private void ApplyPayload()
+        {
+            int index = _payloadIndex.Value;
+            if (index < 0)
+                return;
+
+            GameObject prefab = _catalogue != null ? _catalogue.Get(index) : null;
+            if (prefab == null)
+            {
+                Debug.LogWarning(
+                    $"{nameof(NetworkGrabbable)} on {gameObject.name} has no payload for index {index}" +
+                    (_catalogue == null ? "; no catalogue is assigned." : "."),
+                    this);
+                return;
+            }
+
+            Transform root = _payloadRoot != null ? _payloadRoot : transform;
+
+            /* Detach the old look before destroying it. Destroy is deferred to the end of the
+             * frame, so anything left parented would still be found by the geometry sweep
+             * below and would contribute its collider to the measurements. Deactivating as
+             * well closes the window where a detached copy is still queryable. */
+            for (int i = root.childCount - 1; i >= 0; i--)
+            {
+                GameObject old = root.GetChild(i).gameObject;
+                old.SetActive(false);
+                old.transform.SetParent(null, worldPositionStays: false);
+                Destroy(old);
+            }
+
+            GameObject payload = Instantiate(prefab, root);
+            payload.transform.localPosition = Vector3.zero;
+            payload.transform.localRotation = Quaternion.identity;
+            payload.transform.localScale = Vector3.one;
+
+            RefreshGeometry();
+        }
+
+        /// <summary>
+        /// Applies a payload change, once per change.
+        /// </summary>
+        /// <remarks>
+        /// Same duplicate as every other SyncType: a host sees its own write and the echoed
+        /// read, and letting both through would tear the payload down and rebuild it twice.
+        /// </remarks>
+        private void OnPayloadChanged(int prev, int next, bool asServer)
+        {
+            if (asServer && IsClientStarted)
+                return;
+
+            ApplyPayload();
+        }
+
         public override void OnStartNetwork()
         {
             base.OnStartNetwork();
 
             _state.OnChange += OnStateChanged;
+            _payloadIndex.OnChange += OnPayloadChanged;
+
             /* SyncVar.OnChange does not fire for the initial value, so a client that joins
-             * while the object is already held would otherwise never apply the state. */
+             * while the object is already held would otherwise never apply the state. The
+             * payload index has exactly the same gap, and by this point a client has already
+             * been handed its sync values. */
             ApplyColliderState();
+            ApplyPayload();
         }
 
         public override void OnStopNetwork()
@@ -206,6 +347,7 @@ namespace Overworked.Interaction
             base.OnStopNetwork();
 
             _state.OnChange -= OnStateChanged;
+            _payloadIndex.OnChange -= OnPayloadChanged;
         }
 
         public override void OnStartClient()

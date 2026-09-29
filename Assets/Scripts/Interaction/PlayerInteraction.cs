@@ -210,6 +210,18 @@ namespace Overworked.Interaction
         private NetworkGrabbable _carriedGrabbable;
 
         /// <summary>
+        /// Whether a carry is in progress.
+        /// </summary>
+        /// <remarks>
+        /// Deliberately a plain bool rather than a test on <see cref="_carried"/>. Unity makes
+        /// a destroyed object compare equal to null, so an object destroyed while it is being
+        /// held — which a round reset or a container does — reads as "not carrying" and skips
+        /// the release entirely, stranding the throw arc on screen. This flag outlives the
+        /// object it refers to.
+        /// </remarks>
+        private bool _isCarrying;
+
+        /// <summary>
         /// Arc showing where a throw would go. Local only.
         /// </summary>
         private ThrowTrajectoryPreview _preview;
@@ -419,13 +431,15 @@ namespace Overworked.Interaction
 
             /* Ownership is the single source of truth for whether an object is still
              * carried. It goes away when the server places the object, when someone else
-             * takes it, and when the object despawns. */
-            if (_carried != null && !_carried.IsOwner)
+             * takes it, and when the object despawns. The destroyed case is why the carry
+             * flag is checked first: a destroyed object compares equal to null, so relying on
+             * _carried alone would read "nothing is carried" and never release. */
+            if (_isCarrying && (_carried == null || !_carried.IsOwner))
                 ReleaseCarry();
 
             ResolvePendingRequest();
 
-            if (_carried != null)
+            if (_isCarrying)
                 UpdateCarry();
             else
                 UpdatePickupInput();
@@ -572,6 +586,7 @@ namespace Overworked.Interaction
         {
             _carried = null;
             _carriedGrabbable = null;
+            _isCarrying = false;
             _charging = false;
 
             if (_preview != null)
@@ -600,6 +615,7 @@ namespace Overworked.Interaction
                 {
                     _carried = _requested;
                     _carriedGrabbable = grabbable;
+                    _isCarrying = true;
                 }
 
                 _requested = null;
