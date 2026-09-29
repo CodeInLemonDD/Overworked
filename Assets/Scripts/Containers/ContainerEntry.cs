@@ -58,15 +58,18 @@ namespace Overworked.Containers
         public int DataId;
 
         /// <summary>
-        /// Who put this here, or -1 when nobody in particular did.
+        /// Who this entry belongs to, or -1 when nobody in particular.
         /// </summary>
         /// <remarks>
-        /// Carried in the entry rather than tracked alongside it, because a container that
-        /// needs to tell owners apart — a printer serving two queues — would otherwise have
-        /// to keep a parallel list, and a second copy of the truth drifts.
+        /// Unused today, and deliberately so. Raw materials have no owner — paper and ink are a
+        /// shared pool, and who fed them in changes nothing — so every entry written right now
+        /// passes -1.
         ///
-        /// It is a client id, not a team id. Teams arrive with 2v2 and will map several
-        /// clients onto one faction above this layer; nothing here has to change for that.
+        /// It was added for a printer that queued work per owner. That design was dropped once
+        /// materials became shared, so this is waiting on the entries that genuinely need an
+        /// origin: a document queued for printing belongs to a faction rather than to the
+        /// machine. If the document store ends up carrying that itself, delete this field
+        /// rather than leave one that nothing explains.
         /// </remarks>
         public int OwnerClientId;
 

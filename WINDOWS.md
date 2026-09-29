@@ -264,17 +264,38 @@ sortingOrder 0。我们一个全屏 RectTransform 盖上去会吃掉那两个按
 
 # W1 · 打印机
 
-**名下文件**:`Assets/Scripts/Stations/Printer.cs`、`Assets/Scripts/Stations/PrinterQueue.cs`
+> **⚠️ 这一节已按设计变更重写。** 用户澄清了一条前提,推翻了原先的「按阵营分队列 + 交替调度」。
 
-**结构**:根上 `ContainerBase`(输入:纸 + 墨)+ `PlacementBlocker`(机器占住那格)+ 碰撞体;
-子物件 `Output` 上 `ContainerBase` + `ContainerView`(产物按列表顺序堆在机器身上)。
+**名下文件**:`Assets/Scripts/Stations/Printer.cs`(修改)
+　　　　　　　`Assets/Scripts/Stations/PrinterQueue.cs`(**删除**)
 
-**按阵营分队列是设计核心,不要简化掉**:`ContainerEntry.OwnerClientId` 标明是谁塞的;
-只有一方有活时给它**全部**产能,双方都有活时**交替**。这样「灌自己的队列」只烧自己的纸、只堵自己的活,
-完全无利可图;而「让打印机一直有活干」变成压制对手的手段 —— **靠干活压制,不靠捣乱**。
-不需要任何反骚扰机制。
+## 设计前提的变更
 
-**这一轮不做数据**:`电脑 → 文件数据` 那条链还没有,打印条件先用「纸 + 墨」。
+**原材料(纸、墨)和谁放的无关,是公用池。** 放置纸张不产生任何分数;分数只来自完成 NPC 的业务。
+
+**有阵营之分的只有「打印出来的文件」** —— 红方的文件1和蓝方的文件1同名但不是同一个文件,在**数据**里区分(模型上也会做区分)。文件来自电脑,而电脑传输过来的数据已经划分好阵营;不同阵营的玩家打开电脑看到的内容不同。文件层这一轮不实现。
+
+### 连带后果:按阵营分队列作废
+
+原来那套设计的前提是「纸和墨有归属 → 灌自己的队列只烧自己的纸、只堵自己的活 → 无利可图」。**材料无归属,前提没了,也就没有可轮转的对象。** 公用池里 6 张纸,谁放的都是那 6 张。
+
+而真正要防的那个漏洞(反复打印同一份废文件堵塞打印机)**本来就在文件层**。所以轮转会在**文件队列**那一步回来,那时它轮转的是**阵营**,不是放纸的人。算法本身可复用,只是今天没有可轮的对象。
+
+### 所以这一轮打印机大幅简化了
+
+没有队列、没有归属、没有 feeder 追踪,就是「纸够 + 有墨 + 输出没满 → 打一张」。
+
+## 结构
+
+| 槽位 | 类型 | 容量 | 说明 |
+|---|---|---|---|
+| 纸 | `ContainerBase` | **6** | 公用池 |
+| 墨 | `ContainerBase` | **1 盒** | 一盒 **8 张**;槽里有盒时 `IsFull`,新盒自然放不进去,即「用完才能更换」 |
+| 输出 | `ContainerBase` | **6** | 满了机器**进入等待**,不丢东西 |
+
+打印条件:`_paper.Count > 0` 且 `_printsRemaining > 0` 且输出未满。消耗:1 张纸 + 1 点墨量。
+
+**注意纸墨必须是两个独立容器。** 原来共用一个容器会死锁:纸塞到 6 张满 → 墨进不来 → 永远凑不齐配方 → 而机器从不退还输入,整局报废。
 
 ```
 项目:E:\UnityProject\Overworked(Unity 6000.6.0f1 + FishNet 4.7.3 + URP,新输入系统,无 asmdef)
@@ -283,53 +304,89 @@ sortingOrder 0。我们一个全屏 RectTransform 盖上去会吃掉那两个按
 1. E:\UnityProject\Overworked\CONSTRAINTS.md —— 硬约束与已冻结接口。违反任何一条都会当场坏掉
 2. E:\UnityProject\Overworked\DEVELOPMENT.md —— 项目已有的坑
 
-你名下(只能改这些):
-- Assets/Scripts/Stations/Printer.cs        (新建)
-- Assets/Scripts/Stations/PrinterQueue.cs   (新建)
+你名下:
+- Assets/Scripts/Stations/Printer.cs        (修改)
+- Assets/Scripts/Stations/PrinterQueue.cs   (删除)
 
 规则:
 - 只改你名下的文件。需要改别人的文件,停下来告诉我
 - 交付前必须让项目能编译。单程序集,你的编译错误会让所有窗口都跑不起来
 - 接口不清楚先问,不要自己发明
 
-任务:打印机工位
+任务:按设计变更修打印机
 
-它是什么:一个 StationBase 子类,【自带模型桌子】,整件摆在场景里。桌子本身零功能,功能全在机器上。
+【设计前提变了】原材料(纸、墨)和谁放的无关,是公用池。有阵营之分的只有
+【打印出来的文件】,而文件来自电脑、这一轮不实现。所以之前那版「按阵营分队列 +
+交替调度」作废 —— 材料无归属,没有可轮转的对象。
 
-结构:
-- 根:ContainerBase(输入,容量 3:纸 + 墨 + 数据)+ PlacementBlocker(机器占住那一格)+ 碰撞体
-- 子物件 Output:ContainerBase(产物)+ ContainerView(把产物按列表顺序堆在机器身上)
-- Printer / PrinterQueue 负责行为
+新的模型:
 
-行为:
-- 输入齐全后【自动】开工,不需要按 E 触发;消耗输入,把产物追加进 Output
-- 产物【堆在机器自己身上】,不进网格体系 —— 用 ContainerBase + ContainerView,
-  不要用 GrabbableSpawner 生成实物堆在台面上
-- 玩家按 E 从 Output 取产物:走 OnServerInteract →
-  GrabbableSpawner.SpawnGrabbable(payload, player.HandPosition, rot, conn) + player.ServerHandToPlayer(nob)
-  两步缺一不可,见 CONSTRAINTS.md 第二节末尾
+  纸槽   _paper : ContainerBase,容量 6        —— 公用池,无归属
+  墨槽   _ink   : ContainerBase,容量 1(一盒)  —— 公用,一盒 8 张
+  输出   _output: ContainerBase,容量 6        —— 满了进入等待
 
-按阵营分队列(设计核心,不要简化掉):
-- 输入条目的 ContainerEntry.OwnerClientId 标明是谁塞的
-- 调度:只有一方有活 → 给它【全部】产能;双方都有活 → 【交替】
-- 为什么:这样「往队列里灌自己的活」只烧自己的纸、只堵自己的活,完全无利可图;
-  而「让打印机一直有活干」就变成了压制对手的手段。不需要任何反骚扰机制
+  打印条件:_paper.Count > 0 且 _printsRemaining > 0 且 输出未满
+  消耗     :1 张纸 + 1 点墨量
 
-电源:这一轮【恒为开】,只留一个 IsPowered 接口,不要实现分区断电。
+必要改动:
 
-数据:这一轮不做。电脑 → 文件数据那条链还没有,打印条件先用「纸 + 墨」。
-把「数据」那条留成一个占位并标明将来接哪里。
+1. 把原来那个 _input 拆成 _paper 和 _ink 两个序列化字段,删掉 _input。
+   各自配 ContainerView,挂在不同子物件上。
 
-验收(用户会用 MPPM 双实例测):
-- 塞纸 + 墨 → 自动产出,产物堆在机器上
-- 从 Output 取一份 → 生成到手里,能拿能扔能放置
-- 两个玩家同时喂 → 谁也不能把对方饿死(交替生效)
-- 一个玩家猛灌自己的队列 → 只拖慢自己
+2. 墨是「一盒 8 张」的计数,不是一张一个条目:
+   - 加服务端字段 _printsRemaining
+   - _ink 从空变有(有人丢进一盒)→ _printsRemaining = PrintsPerCartridge(默认 8)
+   - 每打出一张 → _printsRemaining--
+   - 归零 → 从 _ink 移除那一盒(槽位空出,可以装新的)
+   - 「用完才能更换」不需要额外代码:_ink 容量 1,槽里有盒就是 IsFull,
+     新的墨盒自然放不进去
+
+3. 【删掉 PrinterQueue.cs 整个文件,以及 Printer 里所有跟它相关的调用。】
+   材料无归属,没有队列可排、没有人可轮转。
+   轮转算法会在【文件队列】那一步回来 —— 那时它轮转的是阵营而不是放纸的人,
+   到时用 git 历史把算法捞回来即可,不要现在留着死代码。
+   这不是说你之前写的轮转逻辑有问题:它是对的,只是它要解决的问题在文件层
+   而不在材料层。
+
+4. 【删掉 _feeders 字典、UpdateIntake 里的 feeder 追踪、ResolveFeeder。】
+   它们存在的唯一目的是给材料条目标 OwnerClientId,而材料现在不需要归属。
+   UpdateIntake 剩下的职责只有「把落在 intake 盒里的纸/墨吞进对应容器」。
+
+5. ContainerEntry.OwnerClientId 这个字段【保留】(接口里冻结了,文件条目将来要用),
+   但材料条目一律传 -1。
+
+6. InTake 按 payload 分派:纸索引 → _paper;墨索引 → _ink。
+   各自判自己的 IsFull —— 一个满了不该拦住另一个。
+
+7. 输出满了机器进入等待 —— 这一条现在已经是对的(IsOutputBlocked),不要动。
+
+8. 删掉 TwoJobCapacity 那条警告(前提已不成立)。
+
+9. OnValidate / 启动检查改成:_paper 容量不是 6、_ink 容量不是 1、
+   或 PrintsPerCartridge <= 0 时警告。
+
+10. 在类注释里留一句:「文件队列与阵营轮转在这里接入,见 PrinterQueue 的 git 历史」,
+    标明将来接哪里。
+
+11. 核心窗口已经把 ServerSetHeld 移进 ServerHandToPlayer 了,你那边多出来的那次调用
+    也已经被清掉。改之前先拉一下,免得冲突。
+
+验收:
+- 纸塞到 6 张满 → 仍然可以装墨盒,机器照常工作
+  (这是这次改动要修的核心问题:原来纸墨共用一个容器,纸塞满就永远凑不齐配方)
+- 一盒墨打满 8 张后自动消失,槽位空出,可以装新盒
+- 墨槽有盒时丢新盒进去 → 被拒绝,盒留在世界上
+- 输出堆到 6 张 → 机器停下等待,不丢东西;取走一张后自动继续
+- 只有一个玩家玩的时候也能正常打印(没有队列意味着不需要第二个玩家)
 ```
 
 ---
 
 # W2 · 原料箱
+
+> **一条待办的小修**:`OnServerInteract` 上方那句注释说「Which player a sheet counts for is
+> decided when it is fed into a machine」—— 这句话现在不成立了。材料不再有归属,纸在机器里
+> 也不记谁的分。注释要改,代码不用动(它本来就传的 -1)。
 
 **名下文件**:`Assets/Scripts/Stations/PaperBox.cs`
 
