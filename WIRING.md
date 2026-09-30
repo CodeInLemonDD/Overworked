@@ -68,26 +68,33 @@ W6 按 GUID 扫过全场景:
 ```
 Printer (根)
 ├─ 模型桌子 + 机器模型
-├─ ContainerBase          ← 纸槽,容量 6
+├─ NetworkObject
 ├─ PlacementBlocker
 ├─ 碰撞体(要覆盖机器正面 —— 工位靠它被玩家的扇区检测找到)
 ├─ Printer
 │
-├─ Ink (子物件)
-│   ├─ ContainerBase      ← 墨槽,容量 1
+├─ 纸槽 (子物件)          ← 已有节点
+│   ├─ ContainerBase      ← 纸,容量 6
+│   └─ (可选) ContainerView
+│
+├─ 墨槽 (子物件)          ← 已有节点
+│   ├─ ContainerBase      ← 墨,容量 1
 │   └─ ContainerView
 │
-└─ Output (子物件)
+└─ 输出 (子物件)          ← 已有节点
     ├─ ContainerBase      ← 输出,容量 6
     └─ ContainerView
 ```
+
+**三个容器各自挂在自己的节点上,不要挂在根上。** 对称,而且 `ContainerView` 的堆叠锚点是
+容器的 transform —— 挂在根上(桌底)的话,纸会从桌子下面往上堆。
 
 ### 引用
 
 | 组件 | 字段 | 填 |
 |---|---|---|
 | 根 | `NetworkObject` | 加上(**容器要同步,必须有**) |
-| 根 `Printer` | `_paper` | 根的 `ContainerBase` |
+| 根 `Printer` | `_paper` | **`纸槽`** 的 `ContainerBase` |
 | | `_ink` | `Ink` 的 `ContainerBase` |
 | | `_output` | `Output` 的 `ContainerBase` |
 | | `_paperPayloadIndex` | **0** |
