@@ -22,11 +22,15 @@ namespace Overworked.Containers
     public class PayloadLabel : MonoBehaviour
     {
         /// <summary>
-        /// Text the document's number is written into.
+        /// Every text the document's number is written into.
         /// </summary>
-        [Tooltip("Text the document's number is written into. Leave empty to ignore the number.")]
+        /// <remarks>
+        /// An array because one label is often drawn twice — the real one and a backing copy
+        /// behind it — and both have to say the same thing.
+        /// </remarks>
+        [Tooltip("Every text the document's number is written into. Leave empty to ignore the number.")]
         [SerializeField]
-        private TMP_Text _text;
+        private TMP_Text[] _texts;
 
         /// <summary>
         /// Text colour per team id; index 0 is team 0.
@@ -42,16 +46,23 @@ namespace Overworked.Containers
         /// <param name="team">The document's team, or -1 to leave the colour as authored.</param>
         public void SetVariant(int number, int team)
         {
-            if (_text == null)
+            if (_texts == null || _texts.Length == 0)
                 return;
 
-            if (number >= 0)
-                _text.text = number.ToString();
+            bool tint = _teamColours != null && team >= 0 && team < _teamColours.Length;
+            string text = number >= 0 ? number.ToString() : null;
 
-            if (_teamColours == null || team < 0 || team >= _teamColours.Length)
-                return;
+            foreach (TMP_Text label in _texts)
+            {
+                if (label == null)
+                    continue;
 
-            _text.color = _teamColours[team];
+                if (text != null)
+                    label.text = text;
+
+                if (tint)
+                    label.color = _teamColours[team];
+            }
         }
     }
 }
