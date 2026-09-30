@@ -118,3 +118,6 @@ InitTestScene*.unity*
 
 # Local scratch files
 [Cc]laude.txt
+
+# Local Claude Code settings
+.claude/

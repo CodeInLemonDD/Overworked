@@ -795,6 +795,7 @@ GameObject:
   - component: {fileID: 4080963530969907529}
   - component: {fileID: 2823966936014036078}
   - component: {fileID: 3082244846315972960}
+  - component: {fileID: 4298077441529720793}
   m_Layer: 0
   m_Name: Player
   m_TagString: Player
@@ -957,6 +958,30 @@ MonoBehaviour:
   _kickVerticalRange: 0.45
   _kickForce: 12
   _kickLift: 0.2
+  _stationReach: 2.5
+  _stationHalfAngle: 75
+  _stationLongPressSeconds: 0.3
+--- !u!114 &4298077441529720793
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6670257001723914196}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: b926f08b818453a499b6c503a98f1c1b, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Overworked.Player.PlayerStamina
+  _componentIndexCache: 255
+  _addedNetworkObject: {fileID: 1457668927569843694}
+  _networkObjectCache: {fileID: 0}
+  _tickCallbacks: 6
+  _inputActions: {fileID: -944628639613478452, guid: 052faaac586de48259a63d0c4782560b, type: 3}
+  _staminaCap: 100
+  _drainPerSecond: 12
+  _recoveryDelay: 2
+  _slowBelowRatio: 0.35
 --- !u!1 &7080774052205174901
 GameObject:
   m_ObjectHideFlags: 0
