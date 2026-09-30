@@ -754,9 +754,12 @@ namespace Overworked.Interaction
         {
             if (Body != null)
             {
-                Body.isKinematic = true;
+                /* Zeroed before switching to kinematic, not after: Unity refuses to set a
+                 * velocity on a kinematic body and logs a warning for each attempt, and both of
+                 * the writes below would be refused. */
                 Body.linearVelocity = Vector3.zero;
                 Body.angularVelocity = Vector3.zero;
+                Body.isKinematic = true;
             }
 
             transform.SetPositionAndRotation(target, Quaternion.identity);

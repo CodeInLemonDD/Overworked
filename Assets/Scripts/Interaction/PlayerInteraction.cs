@@ -613,9 +613,11 @@ namespace Overworked.Interaction
             Rigidbody body = grabbable.Body;
             if (body != null && !body.isKinematic)
             {
-                body.isKinematic = true;
+                /* Zeroed first: Unity will not set a velocity on a kinematic body, and logging a
+                 * warning per frame for a body that is about to be made kinematic is noise. */
                 body.linearVelocity = Vector3.zero;
                 body.angularVelocity = Vector3.zero;
+                body.isKinematic = true;
             }
 
             Transform hold = HoldTransform;
