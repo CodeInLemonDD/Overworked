@@ -164,8 +164,20 @@ namespace Overworked.Interaction
         /// <param name="owner">
         /// Connection to hand ownership to, or null to leave the object with the server.
         /// </param>
+        /// <param name="variantNumber">
+        /// The document number drawn on the payload, or -1 to leave the text as authored.
+        /// </param>
+        /// <param name="variantTeam">
+        /// The document's team, which tints the label, or -1 to leave the colour as authored.
+        /// </param>
         /// <returns>The spawned object, or null when it could not be created.</returns>
-        public static NetworkObject SpawnGrabbable(int payloadIndex, Vector3 position, Quaternion rotation, NetworkConnection owner = null)
+        public static NetworkObject SpawnGrabbable(
+            int payloadIndex,
+            Vector3 position,
+            Quaternion rotation,
+            NetworkConnection owner = null,
+            int variantNumber = -1,
+            int variantTeam = -1)
         {
             GrabbableSpawner spawner = Instance;
             if (spawner == null || spawner._objectPrefab == null)
@@ -182,11 +194,18 @@ namespace Overworked.Interaction
             if (nob == null)
                 return null;
 
-            if (payloadIndex >= 0)
+            NetworkGrabbable grabbable = nob.GetComponent<NetworkGrabbable>();
+            if (grabbable != null)
             {
-                NetworkGrabbable grabbable = nob.GetComponent<NetworkGrabbable>();
-                if (grabbable != null)
+                /* Both go on before the spawn, not after. SyncVar.OnChange does not fire for an
+                 * initial value, so a value set afterwards arrives as a change — which means the
+                 * object appears first as the bare template and then corrects itself, and a
+                 * payload swap in between would re-measure the geometry and move the transform. */
+                if (payloadIndex >= 0)
                     grabbable.ServerSetPayload(payloadIndex);
+
+                if (variantNumber >= 0 || variantTeam >= 0)
+                    grabbable.ServerSetVariant(variantNumber, variantTeam);
             }
 
             manager.ServerManager.Spawn(nob, owner);

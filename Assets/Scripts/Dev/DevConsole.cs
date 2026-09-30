@@ -271,11 +271,12 @@ namespace Overworked.Dev
 
         private void Help()
         {
-            Log("spawn entity <payload> <count> <x> <y>   place objects; payload is a catalogue index");
+            Log("spawn entity <payload> <count> <x> <y> [number] [team]");
+            Log("                                         numbers run consecutively from <number>");
             Log("spawn furniture <name> <x> <y>           place a station by prefab name");
             Log("clear entities                           destroy every loose object");
             Log("clear all                                also destroy spawned stations");
-            Log("give <payload>                           put one into the local player's hands");
+            Log("give <payload> [number] [team]           put one into the local player's hands");
             Log("tp <x> <y>                               move the local player to a cell");
             Log("pos                                      print the local player's cell");
             Log("help                                     this");
@@ -322,13 +323,23 @@ namespace Overworked.Dev
                 return;
             if (parts.Length < 6)
             {
-                Log("usage: spawn entity <payload> <count> <x> <y>");
+                Log("usage: spawn entity <payload> <count> <x> <y> [number] [team]");
                 return;
             }
             if (!TryParse(parts[2], "payload", out int payload)
                 || !TryParse(parts[3], "count", out int count)
                 || !TryParse(parts[4], "x", out int x)
                 || !TryParse(parts[5], "y", out int y))
+                return;
+
+            /* Optional, and -1 means "as the template was authored" — the same meaning it has
+             * everywhere else, so leaving them off gives a plain unnumbered sheet. */
+            int number = -1;
+            int team = -1;
+
+            if (parts.Length > 6 && !TryParse(parts[6], "number", out number))
+                return;
+            if (parts.Length > 7 && !TryParse(parts[7], "team", out team))
                 return;
 
             count = Mathf.Clamp(count, 1, 64);
@@ -342,14 +353,20 @@ namespace Overworked.Dev
                  * the solver instead, which reads as the command having misfired. */
                 Vector3 position = centre + Vector3.up * (0.5f + i * 0.3f);
 
-                if (GrabbableSpawner.SpawnGrabbable(payload, position, Quaternion.identity) == null)
+                /* Consecutive numbers rather than the same one on all of them: a round hands out
+                 * Excel 1, Excel 2 and so on, and seeing several different numbers on the pile is
+                 * the point of testing this at all. */
+                int thisNumber = number >= 0 ? number + i : -1;
+
+                if (GrabbableSpawner.SpawnGrabbable(payload, position, Quaternion.identity, null, thisNumber, team) == null)
                 {
                     Log("spawn failed; is the object prefab and a spawner assigned?");
                     return;
                 }
             }
 
-            Log($"spawned {count} x payload {payload} at cell ({x}, {y}).");
+            string numbered = number >= 0 ? $" numbered {number}..{number + count - 1}" : string.Empty;
+            Log($"spawned {count} x payload {payload}{numbered} at cell ({x}, {y}).");
         }
 
         /// <summary>
@@ -472,10 +489,18 @@ namespace Overworked.Dev
                 return;
             if (parts.Length < 2)
             {
-                Log("usage: give <payload>");
+                Log("usage: give <payload> [number] [team]");
                 return;
             }
             if (!TryParse(parts[1], "payload", out int payload))
+                return;
+
+            int number = -1;
+            int team = -1;
+
+            if (parts.Length > 2 && !TryParse(parts[2], "number", out number))
+                return;
+            if (parts.Length > 3 && !TryParse(parts[3], "team", out team))
                 return;
 
             NetworkObject player = FindLocalPlayer();
@@ -492,7 +517,8 @@ namespace Overworked.Dev
                 return;
             }
 
-            NetworkObject nob = GrabbableSpawner.SpawnGrabbable(payload, interaction.HandPosition, Quaternion.identity, player.Owner);
+            NetworkObject nob = GrabbableSpawner.SpawnGrabbable(
+                payload, interaction.HandPosition, Quaternion.identity, player.Owner, number, team);
             if (nob == null)
             {
                 Log("spawn failed.");
