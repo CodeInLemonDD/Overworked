@@ -74,20 +74,29 @@ Printer (根)
 ├─ Printer
 │
 ├─ 纸槽 (子物件)          ← 已有节点
-│   ├─ ContainerBase      ← 纸,容量 6
-│   └─ (可选) ContainerView
+│   └─ ContainerBase      ← 纸,容量 6      【不挂 ContainerView】
 │
 ├─ 墨槽 (子物件)          ← 已有节点
-│   ├─ ContainerBase      ← 墨,容量 1
-│   └─ ContainerView
+│   └─ ContainerBase      ← 墨,容量 1      【不挂 ContainerView】
 │
 └─ 输出 (子物件)          ← 已有节点
-    ├─ ContainerBase      ← 输出,容量 6
-    └─ ContainerView
+    ├─ ContainerBase      ← 输出,容量 6    【不挂 ContainerView】
+    └─ 打印好的纸1..6      ← 视觉由动画 + PrinterDisplay 负责
 ```
 
-**三个容器各自挂在自己的节点上,不要挂在根上。** 对称,而且 `ContainerView` 的堆叠锚点是
-容器的 transform —— 挂在根上(桌底)的话,纸会从桌子下面往上堆。
+**三个容器各自挂在自己的节点上,不要挂在根上。**
+
+**三个都【不要】挂 `ContainerView`:**
+
+- `输出` —— 你已经有 `打印好的纸1..6` 六个槽位了。动画负责开关、`PrinterDisplay` 负责填内容。
+  再挂一个 `ContainerView` 会在同一位置又实例化一批 prefab,两套视觉叠在一起。
+- `纸槽` / `墨槽` —— 只关心「还剩多少」,顺序没有意义,该用指示灯 / 滚动条,不该用纸堆。
+  纸塞进去就是数据了,把它重新画成物理纸堆和容器模型本身是矛盾的。
+
+**判据:容器的可视化用「堆」还是「表」,看它的顺序有没有意义。** 输出的顺序有意义
+(取用是 LIFO,玩家要看见最上面那张是什么),所以用堆;纸和墨没有,所以用表。
+
+`ContainerView` 留给将来那些**顺序有意义、但没有专属动画**的容器(货架、文件夹)。
 
 ### 引用
 
@@ -103,8 +112,7 @@ Printer (根)
 | | `_secondsPerOutput` | `3`(盲设,要试玩调 —— 应**明显小于**「跑到原料箱再跑回来」的时间) |
 | | `_printsPerCartridge` | `8` |
 | | `_intakeCentre` / `_intakeHalfExtents` | 选中机器看 Gizmo 调,**绿框要盖住桌面**;上沿必须高过物体落在机器顶面后的位置 |
-| `Ink` / `Output` | `ContainerView._container` | 各自那格的 `ContainerBase` |
-| | `ContainerView._catalogue` | `PayloadCatalogue` |
+| 三个槽位 | (不挂 `ContainerView`,理由见上方结构说明) | — |
 
 容器容量填在 **`ContainerBase._capacity`** 上,不是 `Printer` 上。
 
@@ -130,7 +138,7 @@ PaperBox (根)
 ├─ PlacementBlocker
 ├─ 碰撞体
 ├─ PaperBox
-└─ (可选) ContainerView   ← 想看见纸堆才加
+└─ (不挂 ContainerView —— 只关心剩几张,该用指示灯 / 滚动条)
 ```
 
 | 组件 | 字段 | 填 |
@@ -140,7 +148,7 @@ PaperBox (根)
 | | `_payloadIndex` | **0** ← **必须和打印机的 `_paperPayloadIndex` 是同一个数** |
 | | `_catalogue` | `PayloadCatalogue`(只用来在启动时校验索引) |
 | | `_refillSeconds` | `8`(盲设;这是「一张纸的价格」,用走路付) |
-| (可选) `ContainerView` | `_container` / `_catalogue` | 同上 |
+| — | 不挂 `ContainerView` | 条目全是同一种纸,顺序没有意义 —— 用指示灯表示剩余量 |
 
 **不要给它挂 `SnapSurface`** —— 它是工位,占一格,靠 `PlacementBlocker` 挡。
 
