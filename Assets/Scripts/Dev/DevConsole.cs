@@ -5,6 +5,7 @@ using FishNet.Managing;
 using FishNet.Object;
 using Overworked.Stations;
 using Overworked.Interaction;
+using Overworked.Player;
 using UnityEngine;
 using UnityEngine.InputSystem;
 
@@ -118,9 +119,13 @@ namespace Overworked.Dev
         private readonly List<NetworkObject> _objectBuffer = new();
 
         /// <summary>
-        /// Set while the toggle key is handled, so the character it also produces is not typed.
+        /// Frame the console was toggled on, so the backtick that opened it is not typed.
         /// </summary>
-        private bool _swallowNextCharacter;
+        /// <remarks>
+        /// A frame rather than a flag. A flag would survive until some later character arrived
+        /// and eat it instead, so the first letter typed after opening would vanish.
+        /// </remarks>
+        private int _swallowFrame = -1;
 
         private void OnEnable()
         {
@@ -132,6 +137,10 @@ namespace Overworked.Dev
         {
             if (Keyboard.current != null)
                 Keyboard.current.onTextInput -= OnTextInput;
+
+            /* The console may be destroyed or switched off while it is open. Leaving the player
+             * unable to move, with nothing on screen to say why, is the worst way to find out. */
+            SetGameplayInputEnabled(true);
         }
 
         private void Start()
@@ -158,12 +167,13 @@ namespace Overworked.Dev
             if (Keyboard.current[_toggleKey].wasPressedThisFrame)
             {
                 _open = !_open;
-
-                /* The toggle key is a character key, so pressing it also produces a backtick
-                 * through onTextInput. Swallowing exactly one keeps the buffer clean without
-                 * turning text input off for the frame, which would drop a fast typist's keys. */
-                _swallowNextCharacter = true;
                 _input = string.Empty;
+                _swallowFrame = Time.frameCount;
+
+                /* Typing a command uses the same keys the game reads, so the player would walk
+                 * around and press E while the console is up. Every input-owning component holds
+                 * its own copy of the action asset, so each has to be told. */
+                SetGameplayInputEnabled(!_open);
             }
 
             if (!_open)
@@ -190,13 +200,15 @@ namespace Overworked.Dev
             if (!_open || !_commandsEnabled)
                 return;
 
-            if (_swallowNextCharacter)
-            {
-                _swallowNextCharacter = false;
+            /* The toggle key is a character key, so opening the console also delivers its own
+             * backtick. Only that character, and only on the frame it happened. */
+            if (Time.frameCount == _swallowFrame && (character == '`' || character == '~'))
                 return;
-            }
 
-            if (character == '\n' || character == '\r' || character == '\t')
+            /* Control characters are the keys that are not text — backspace, escape, the arrows.
+             * They are handled as keys, and letting them into the buffer would leave invisible
+             * junk in the line that backspace then has to chew through one character at a time. */
+            if (char.IsControl(character))
                 return;
 
             _input += character;
@@ -207,19 +219,37 @@ namespace Overworked.Dev
             if (!_commandsEnabled || !_open)
                 return;
 
+            float width = Screen.width;
             float height = Screen.height * _panelHeight;
 
-            GUI.Box(new Rect(0f, 0f, Screen.width, height), GUIContent.none);
-            GUILayout.BeginArea(new Rect(8f, 8f, Screen.width - 16f, height - 16f));
+            /* Laid out with explicit rectangles rather than GUILayout. With a layout group the
+             * output grows downward and pushes the input line past the bottom of the clipped
+             * area — where it is still live and still receives typing, but invisible, which reads
+             * as the console having lost its prompt. Pinning the two lines to the bottom and
+             * drawing only as much history as fits above them cannot do that. */
+            float line = GUI.skin.label.lineHeight;
+            if (line <= 0f)
+                line = 16f;
 
-            for (int i = 0; i < _log.Count; i++)
-                GUILayout.Label(_log[i]);
+            const float pad = 8f;
+            float inputHeight = line * 2f;
 
-            GUILayout.FlexibleSpace();
-            GUILayout.Label($"> {_input}_");
-            GUILayout.Label("Enter to run, Esc to close.");
+            GUI.Box(new Rect(0f, 0f, width, height), GUIContent.none);
 
-            GUILayout.EndArea();
+            Rect logRect = new(pad, pad, width - pad * 2f, height - pad * 3f - inputHeight);
+            Rect inputRect = new(pad, height - pad - inputHeight, width - pad * 2f, inputHeight);
+
+            int fits = Mathf.Max(1, Mathf.FloorToInt(logRect.height / line));
+            int first = Mathf.Max(0, _log.Count - fits);
+
+            for (int i = first; i < _log.Count; i++)
+            {
+                float y = logRect.y + (i - first) * line;
+                GUI.Label(new Rect(logRect.x, y, logRect.width, line), _log[i]);
+            }
+
+            GUI.Label(new Rect(inputRect.x, inputRect.y, inputRect.width, line), $"> {_input}_");
+            GUI.Label(new Rect(inputRect.x, inputRect.y + line, inputRect.width, line), "Enter to run, Esc to close.");
         }
 
         // ------------------------------------------------------------------ commands
@@ -586,6 +616,35 @@ namespace Overworked.Dev
         }
 
         // ------------------------------------------------------------------ helpers
+
+        /// <summary>
+        /// Turns the local player's gameplay input on or off.
+        /// </summary>
+        /// <remarks>
+        /// With the console open, typing a command also walks the character and presses E: the
+        /// keystrokes are the same ones the game reads, and the console is only a second reader
+        /// of them. There is no single switch to throw, because each of these components keeps
+        /// its own copy of the action asset — a shared one would let one player's Disable turn
+        /// another player's input off. So each is told separately.
+        /// </remarks>
+        private void SetGameplayInputEnabled(bool enabled)
+        {
+            NetworkObject player = FindLocalPlayer();
+            if (player == null)
+                return;
+
+            PlayerInteraction interaction = player.GetComponent<PlayerInteraction>();
+            if (interaction != null)
+                interaction.SetInputEnabled(enabled);
+
+            PlayerMovementPrediction movement = player.GetComponent<PlayerMovementPrediction>();
+            if (movement != null)
+                movement.SetInputEnabled(enabled);
+
+            PlayerStamina stamina = player.GetComponent<PlayerStamina>();
+            if (stamina != null)
+                stamina.SetInputEnabled(enabled);
+        }
 
         /// <summary>
         /// Refuses a command that needs the server, and says so.

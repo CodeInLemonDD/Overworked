@@ -381,7 +381,7 @@ namespace Overworked.Interaction
         /// <summary>
         /// Enables or disables polling of the interaction actions.
         /// </summary>
-        private void SetInputEnabled(bool isEnabled)
+        public void SetInputEnabled(bool isEnabled)
         {
             if (_playerActionMap == null)
                 return;

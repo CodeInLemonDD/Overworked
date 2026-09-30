@@ -278,7 +278,7 @@ namespace Overworked.Player
         /// Actions are not enabled by loading the asset; the enable state is not
         /// serialized on the asset, so it must be set explicitly at runtime.
         /// </remarks>
-        private void SetInputEnabled(bool isEnabled)
+        public void SetInputEnabled(bool isEnabled)
         {
             if (_playerActionMap == null)
                 return;
