@@ -119,6 +119,26 @@ namespace Overworked.Dev
         private readonly List<NetworkObject> _objectBuffer = new();
 
         /// <summary>
+        /// Lines submitted before, oldest first.
+        /// </summary>
+        private readonly List<string> _history = new();
+
+        /// <summary>
+        /// Where the arrow keys are in <see cref="_history"/>, or -1 for the line being typed.
+        /// </summary>
+        private int _historyIndex = -1;
+
+        /// <summary>
+        /// The half-typed line, kept while the history is being browsed so it can be given back.
+        /// </summary>
+        private string _stashedInput = string.Empty;
+
+        /// <summary>
+        /// Every first word the console knows.
+        /// </summary>
+        private static readonly string[] Verbs = { "spawn", "clear", "give", "tp", "pos", "help" };
+
+        /// <summary>
         /// Frame the console was toggled on, so the backtick that opened it is not typed.
         /// </summary>
         /// <remarks>
@@ -185,6 +205,15 @@ namespace Overworked.Dev
             if (Keyboard.current.escapeKey.wasPressedThisFrame)
                 _open = false;
 
+            if (Keyboard.current.upArrowKey.wasPressedThisFrame)
+                Browse(-1);
+
+            if (Keyboard.current.downArrowKey.wasPressedThisFrame)
+                Browse(1);
+
+            if (Keyboard.current.tabKey.wasPressedThisFrame)
+                Complete();
+
             if (Keyboard.current.enterKey.wasPressedThisFrame || Keyboard.current.numpadEnterKey.wasPressedThisFrame)
             {
                 Submit(_input);
@@ -227,7 +256,11 @@ namespace Overworked.Dev
              * area — where it is still live and still receives typing, but invisible, which reads
              * as the console having lost its prompt. Pinning the two lines to the bottom and
              * drawing only as much history as fits above them cannot do that. */
-            float line = GUI.skin.label.lineHeight;
+            /* Measured rather than taken from lineHeight. That value is the style's own idea of a
+             * line, and a GUI.Label clips to the rectangle it is given, so a rectangle built from
+             * it cuts the bottom off every line. CalcSize asks the style how tall this text
+             * actually is, descenders included. */
+            float line = GUI.skin.label.CalcSize(new GUIContent("Ag")).y;
             if (line <= 0f)
                 line = 16f;
 
@@ -236,8 +269,10 @@ namespace Overworked.Dev
 
             GUI.Box(new Rect(0f, 0f, width, height), GUIContent.none);
 
-            Rect logRect = new(pad, pad, width - pad * 2f, height - pad * 3f - inputHeight);
-            Rect inputRect = new(pad, height - pad - inputHeight, width - pad * 2f, inputHeight);
+            /* The bottom margin is doubled so the last line has room below its baseline instead
+             * of sitting on the panel's edge. */
+            Rect inputRect = new(pad, height - pad * 2f - inputHeight, width - pad * 2f, inputHeight);
+            Rect logRect = new(pad, pad, width - pad * 2f, inputRect.y - pad * 2f);
 
             int fits = Mathf.Max(1, Mathf.FloorToInt(logRect.height / line));
             int first = Mathf.Max(0, _log.Count - fits);
@@ -249,7 +284,7 @@ namespace Overworked.Dev
             }
 
             GUI.Label(new Rect(inputRect.x, inputRect.y, inputRect.width, line), $"> {_input}_");
-            GUI.Label(new Rect(inputRect.x, inputRect.y + line, inputRect.width, line), "Enter to run, Esc to close.");
+            GUI.Label(new Rect(inputRect.x, inputRect.y + line, inputRect.width, line), "Enter run, Esc close, Tab complete, Up/Down history.");
         }
 
         // ------------------------------------------------------------------ commands
@@ -264,7 +299,17 @@ namespace Overworked.Dev
 
             Log($"> {line}");
 
-            string[] parts = line.Trim().Split(' ');
+            string trimmed = line.Trim();
+
+            /* Kept only when it differs from the last one, so holding Enter on a repeated command
+             * does not fill the history with copies of it. */
+            if (_history.Count == 0 || _history[_history.Count - 1] != trimmed)
+                _history.Add(trimmed);
+
+            _historyIndex = -1;
+            _stashedInput = string.Empty;
+
+            string[] parts = trimmed.Split(' ');
             string verb = parts[0].ToLowerInvariant();
 
             switch (verb)
@@ -616,6 +661,171 @@ namespace Overworked.Dev
         }
 
         // ------------------------------------------------------------------ helpers
+
+        /// <summary>
+        /// Steps through the submitted lines, and back to the half-typed one.
+        /// </summary>
+        /// <param name="direction">-1 for older, 1 for newer.</param>
+        /// <remarks>
+        /// The line being typed is put aside before the first step into the history, so walking
+        /// back down past the newest entry gives it back rather than leaving an empty prompt.
+        /// </remarks>
+        private void Browse(int direction)
+        {
+            if (_history.Count == 0)
+                return;
+
+            if (_historyIndex < 0)
+            {
+                if (direction > 0)
+                    return;
+
+                _stashedInput = _input;
+                _historyIndex = _history.Count;
+            }
+
+            int next = Mathf.Clamp(_historyIndex + direction, 0, _history.Count);
+
+            if (next == _history.Count)
+            {
+                _historyIndex = -1;
+                _input = _stashedInput;
+                return;
+            }
+
+            _historyIndex = next;
+            _input = _history[next];
+        }
+
+        /// <summary>
+        /// Completes the word being typed from whatever could come next.
+        /// </summary>
+        /// <remarks>
+        /// Fills in as far as the candidates agree, and lists them when they agree on nothing
+        /// further. That is what a shell does, and it is the behaviour that stays useful when the
+        /// thing being completed is a prefab name nobody can remember the spelling of.
+        /// </remarks>
+        private void Complete()
+        {
+            string[] tokens = _input.Split(' ');
+
+            /* Whether the last word is partly typed or not started, its position in the line is
+             * the same — a trailing space simply leaves an empty last token. */
+            int position = tokens.Length - 1;
+            bool newWord = _input.Length == 0 || _input.EndsWith(" ");
+            string partial = newWord ? string.Empty : tokens[position];
+
+            List<string> matches = new();
+            foreach (string candidate in CandidatesFor(tokens, position))
+            {
+                if (candidate.StartsWith(partial, System.StringComparison.OrdinalIgnoreCase))
+                    matches.Add(candidate);
+            }
+
+            if (matches.Count == 0)
+                return;
+
+            if (matches.Count == 1)
+            {
+                ReplaceLastToken(tokens, position, newWord, matches[0]);
+                return;
+            }
+
+            /* Several matches: extend to what they share, and only list them when that shares
+             * nothing more than what has already been typed — otherwise a second Tab on an
+             * unchanged line would print the same list again. */
+            string common = CommonPrefix(matches);
+            if (common.Length > partial.Length)
+                ReplaceLastToken(tokens, position, newWord, common);
+            else
+                Log("  " + string.Join("  ", matches));
+        }
+
+        /// <summary>
+        /// Puts a completed word back into the line.
+        /// </summary>
+        private void ReplaceLastToken(string[] tokens, int position, bool newWord, string word)
+        {
+            if (newWord)
+            {
+                _input = _input + word + " ";
+                return;
+            }
+
+            tokens[position] = word;
+            _input = string.Join(" ", tokens);
+        }
+
+        /// <summary>
+        /// What could come next at a position in the line.
+        /// </summary>
+        private List<string> CandidatesFor(string[] tokens, int position)
+        {
+            List<string> result = new();
+
+            if (position == 0)
+            {
+                result.AddRange(Verbs);
+                return result;
+            }
+
+            string verb = tokens[0].ToLowerInvariant();
+
+            if (verb == "spawn" && position == 1)
+            {
+                result.Add("entity");
+                result.Add("furniture");
+                return result;
+            }
+
+            if (verb == "clear" && position == 1)
+            {
+                result.Add("entities");
+                result.Add("all");
+                return result;
+            }
+
+            bool placingFurniture = verb == "spawn" && position == 2
+                && tokens.Length > 1 && tokens[1].ToLowerInvariant() == "furniture";
+
+            if (placingFurniture && _furniture != null)
+            {
+                foreach (NetworkObject prefab in _furniture)
+                {
+                    if (prefab != null)
+                        result.Add(prefab.name);
+                }
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// The longest start every candidate shares.
+        /// </summary>
+        private static string CommonPrefix(List<string> values)
+        {
+            if (values.Count == 0)
+                return string.Empty;
+
+            string prefix = values[0];
+
+            for (int i = 1; i < values.Count; i++)
+            {
+                int j = 0;
+                while (j < prefix.Length && j < values[i].Length
+                       && char.ToLowerInvariant(prefix[j]) == char.ToLowerInvariant(values[i][j]))
+                {
+                    j++;
+                }
+
+                prefix = prefix.Substring(0, j);
+                if (prefix.Length == 0)
+                    break;
+            }
+
+            return prefix;
+        }
 
         /// <summary>
         /// Turns the local player's gameplay input on or off.
