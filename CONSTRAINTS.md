@@ -61,6 +61,7 @@
 | B | 项目**没有 asmdef**,全部代码在一个程序集 → **任何一个模块的编译错误,所有模块都跑不起来**。交付前必须确认自己这部分能编译 |
 | C | 自建 HUD 必须 `sortingOrder >= 1`、**不挂 `GraphicRaycaster`**、所有 graphic `raycastTarget = false`,否则会吃掉 FishNet demo 左上角 Host/Client 按钮的点击 —— MPPM 测试就靠它们 |
 | D | 场景与 prefab 是 YAML,**无法合并**。只能有一个窗口碰,其余由用户手工操作 |
+| E | **`OnGUI` 收不到键盘输入。** 新输入系统**不能给 IMGUI 喂事件**(`KnownLimitations.md`:"The Input System cannot generate input for IMGUI"),而本项目是 `activeInputHandler: 1`(独占)。所以 **`GUI.TextField` 画得出来,但一个字符也收不到**。**绘制不受影响** —— 界面照旧用 `OnGUI` 画,字符改从 `Keyboard.current.onTextInput` 收。见 `Dev/DevConsole.cs` |
 
 ---
 
