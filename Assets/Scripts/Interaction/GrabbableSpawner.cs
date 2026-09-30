@@ -49,6 +49,23 @@ namespace Overworked.Interaction
         private float _spawnHeight = 1.5f;
 
         /// <summary>
+        /// Which payload every spawned object wears.
+        /// </summary>
+        /// <remarks>
+        /// -1 leaves the prefab exactly as authored, which is what this did before payloads
+        /// existed. Set it to a catalogue index to open the round with that kind of object
+        /// already in play — paper, so a printer has something to eat without a paper box
+        /// standing there, for instance.
+        ///
+        /// It is an index into the same catalogue everything else uses, so it means the same
+        /// thing here as it does in a container entry.
+        /// </remarks>
+        [Tooltip("Payload every spawned object wears, or -1 for the prefab's authored look.")]
+        [Min(-1)]
+        [SerializeField]
+        private int _payloadIndex = -1;
+
+        /// <summary>
         /// NetworkManager this spawner belongs to.
         /// </summary>
         private NetworkManager _networkManager;
@@ -122,14 +139,10 @@ namespace Overworked.Interaction
                 Vector3 position = WorldGrid.CellCentre(cell);
                 position.y = _spawnHeight;
 
-                NetworkObject nob = _networkManager.GetPooledInstantiated(
-                    _objectPrefab,
-                    position,
-                    Quaternion.identity,
-                    asServer: true);
-
-                // No owner: the server simulates it until someone picks it up.
-                _networkManager.ServerManager.Spawn(nob);
+                /* Through the same entry point everything else uses, so there is one place that
+                 * knows how an object is made rather than two that can drift apart. No owner:
+                 * the server simulates it until someone picks it up. */
+                SpawnGrabbable(_payloadIndex, position, Quaternion.identity);
             }
         }
 
