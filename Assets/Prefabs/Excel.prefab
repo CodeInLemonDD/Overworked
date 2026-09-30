@@ -9,8 +9,9 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 1466054708918513014}
+  - component: {fileID: 3548378679344185235}
   m_Layer: 0
-  m_Name: Excel Team A
+  m_Name: Excel
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -34,6 +35,24 @@ Transform:
   - {fileID: 1504926995175982755}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &3548378679344185235
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 560348858155662447}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 946efe6310d4f954791c4aa20a213599, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Overworked.Containers.PayloadLabel
+  _texts:
+  - {fileID: 8185765512100075342}
+  - {fileID: 8592174135676154304}
+  _teamColours:
+  - {r: 0.6037736, g: 0.1852055, b: 0.0512637, a: 1}
+  - {r: 0.046457764, g: 0.32326365, b: 0.509434, a: 1}
 --- !u!1 &786592231015661364
 GameObject:
   m_ObjectHideFlags: 0
@@ -140,7 +159,7 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_text: 1
+  m_text: 
   m_isRightToLeft: 1
   m_fontAsset: {fileID: 11400000, guid: 406ca8fd58cf95e468ebbc02c12c0155, type: 2}
   m_sharedMaterial: {fileID: -3969318100338191749, guid: 406ca8fd58cf95e468ebbc02c12c0155, type: 2}
@@ -167,7 +186,7 @@ MonoBehaviour:
   m_faceColor:
     serializedVersion: 2
     rgba: 4294967295
-  m_fontSize: 3.65
+  m_fontSize: 36
   m_fontSizeBase: 36
   m_fontWeight: 400
   m_enableAutoSizing: 1
@@ -321,7 +340,7 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_text: 1
+  m_text: 
   m_isRightToLeft: 0
   m_fontAsset: {fileID: 11400000, guid: 406ca8fd58cf95e468ebbc02c12c0155, type: 2}
   m_sharedMaterial: {fileID: -3969318100338191749, guid: 406ca8fd58cf95e468ebbc02c12c0155, type: 2}
@@ -348,7 +367,7 @@ MonoBehaviour:
   m_faceColor:
     serializedVersion: 2
     rgba: 4294967295
-  m_fontSize: 3.65
+  m_fontSize: 36
   m_fontSizeBase: 36
   m_fontWeight: 400
   m_enableAutoSizing: 1
