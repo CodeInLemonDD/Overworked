@@ -3,6 +3,7 @@ using FishNet.Connection;
 using FishNet.Managing;
 using FishNet.Managing.Timing;
 using FishNet.Object;
+using FishNet.Object.Synchronizing;
 using Overworked.Containers;
 using Overworked.Interaction;
 using UnityEngine;
@@ -54,6 +55,16 @@ namespace Overworked.Stations
         /// Cartridges the ink slot is built to hold.
         /// </summary>
         private const int InkCapacity = 1;
+
+        /// <summary>
+        /// Sheets the pile holds.
+        /// </summary>
+        /// <remarks>
+        /// Fixed by the animation rather than chosen: there are six pile slots and six Finished
+        /// states, one per slot. An output of any other size would leave sheets with nowhere to
+        /// be drawn, so the view checks the container against this.
+        /// </remarks>
+        public const int PileCapacity = 6;
 
         [Header("Containers")]
 
@@ -121,10 +132,10 @@ namespace Overworked.Stations
         /// Blind-set, like every other timing in the project. What it has to beat is the trip to
         /// the paper box and back, since that round trip is the real cost of a sheet.
         /// </remarks>
-        [Tooltip("Seconds of work per printed sheet.")]
+        [Tooltip("Seconds of work per printed sheet. Must match the length of the Printing clips, or the machine will visibly stall.")]
         [Min(0f)]
         [SerializeField]
-        private float _secondsPerOutput = 3f;
+        private float _secondsPerOutput = 2f;
 
         [Header("Ink")]
 
@@ -183,6 +194,47 @@ namespace Overworked.Stations
         private TimeManager _timeManager;
 
         /// <summary>
+        /// 0 when nothing is being printed; otherwise the position in the pile that the sheet
+        /// being printed will take. Replicated.
+        /// </summary>
+        /// <remarks>
+        /// Written once when a job starts and then left alone until it finishes, even if the
+        /// player takes sheets out while it runs. It is reset to 0 rather than advanced, and
+        /// the animator reads that as "not N" rather than as "0" — see FinishCraft for why
+        /// those are not the same thing here. The animation is two seconds of a sheet
+        /// arriving and cannot be renumbered or restarted underneath itself, so a job that ends
+        /// up landing lower in the pile than it announced still finishes as the state it began
+        /// as, and the pile corrects itself afterwards.
+        /// </remarks>
+        private readonly SyncVar<int> _printingSlot = new(0);
+
+        /// <summary>
+        /// Payload index of the sheet being printed, or -1. Replicated.
+        /// </summary>
+        /// <remarks>
+        /// What the machine shows coming out of itself, before the document has landed in the
+        /// pile and can be read from there.
+        /// </remarks>
+        private readonly SyncVar<int> _printingPayload = new(-1);
+
+        /// <summary>
+        /// Sheets the cartridge in the ink slot still has in it. Replicated.
+        /// </summary>
+        /// <remarks>
+        /// Derived from the slot rather than tracked beside it: zero while the slot is empty,
+        /// refilled to <see cref="_printsPerCartridge"/> when a cartridge goes in, spent one
+        /// sheet at a time, and the cartridge leaves the slot the moment it reaches zero. The
+        /// slot and this number are never allowed to disagree about whether there is ink,
+        /// because the only two places that change one change the other.
+        ///
+        /// Replicated because it is the only thing that can answer "how much ink is left". The
+        /// cartridge is a single entry in a container of capacity one, so counting entries says
+        /// nothing, and the number lives nowhere else a client could reach. Without this the
+        /// machine's ink would be invisible to everyone including the player standing at it.
+        /// </remarks>
+        private readonly SyncVar<int> _printsRemaining = new(0);
+
+        /// <summary>
         /// Server-only: true while a sheet is being made.
         /// </summary>
         private bool _crafting;
@@ -193,21 +245,35 @@ namespace Overworked.Stations
         private float _craftSeconds;
 
         /// <summary>
-        /// Server-only: sheets the cartridge in the ink slot still has in it.
-        /// </summary>
-        /// <remarks>
-        /// Derived from the slot rather than tracked beside it: zero while the slot is empty,
-        /// refilled to <see cref="_printsPerCartridge"/> when a cartridge goes in, spent one
-        /// sheet at a time, and the cartridge leaves the slot the moment it reaches zero. The
-        /// slot and this number are never allowed to disagree about whether there is ink,
-        /// because the only two places that change one change the other.
-        /// </remarks>
-        private int _printsRemaining;
-
-        /// <summary>
         /// Whether the machine is running.
         /// </summary>
         public bool IsPowered => _isPowered;
+
+        /// <summary>
+        /// 0 when nothing is being printed; otherwise the pile position the sheet being printed
+        /// will take.
+        /// </summary>
+        public int PrintingSlot => _printingSlot.Value;
+
+        /// <summary>
+        /// Payload index of the sheet being printed, or -1 when nothing is.
+        /// </summary>
+        public int PrintingPayload => _printingPayload.Value;
+
+        /// <summary>
+        /// Sheets the cartridge in the ink slot still has in it; zero when there is no cartridge.
+        /// </summary>
+        public int PrintsRemaining => _printsRemaining.Value;
+
+        /// <summary>
+        /// The container printed sheets stack in.
+        /// </summary>
+        /// <remarks>
+        /// Exposed for the view that draws the pile. Handing out the machine's own reference
+        /// rather than letting the view take a second one is what stops the two from ever
+        /// pointing at different containers.
+        /// </remarks>
+        public ContainerBase Output => _output;
 
         /// <summary>
         /// Server: turns the machine on or off.
@@ -283,6 +349,13 @@ namespace Overworked.Stations
             {
                 Debug.LogWarning(
                     $"{nameof(Printer)} on {gameObject.name} has an ink capacity of {_ink.Capacity}; it is built around {InkCapacity}, one cartridge.",
+                    this);
+            }
+
+            if (!_output.IsUnlimited && _output.Capacity != PileCapacity)
+            {
+                Debug.LogWarning(
+                    $"{nameof(Printer)} on {gameObject.name} has an output capacity of {_output.Capacity}; the animation has {PileCapacity} pile slots.",
                     this);
             }
 
@@ -400,7 +473,7 @@ namespace Overworked.Stations
             /* A cartridge that has just gone in is a full one. This is the only place the ink
              * count rises; FinishCraft is the only place it falls. */
             if (slot == _ink)
-                _printsRemaining = _printsPerCartridge;
+                _printsRemaining.Value = _printsPerCartridge;
 
             /* Destroy rather than pool: these objects carry per-life state — the placed cell,
              * the settle timer, the payload — that a recycled instance would bring back with
@@ -462,11 +535,17 @@ namespace Overworked.Stations
             if (_paper == null || _ink == null || _output == null)
                 return;
 
-            if (_paper.Count == 0 || _printsRemaining <= 0 || IsOutputBlocked())
+            if (_paper.Count == 0 || _printsRemaining.Value <= 0 || IsOutputBlocked())
                 return;
 
             if (!_paper.ServerTryRemoveFirst())
                 return;
+
+            /* Announced before the work starts rather than when it lands, because the animation
+             * begins now and has to know which pile position and which document it is showing.
+             * Both are then left alone for the rest of the job. */
+            _printingSlot.Value = _output.Count + 1;
+            _printingPayload.Value = _outputPayloadIndex;
 
             _crafting = true;
             _craftSeconds = 0f;
@@ -493,16 +572,30 @@ namespace Overworked.Stations
             _crafting = false;
             _craftSeconds = 0f;
 
+            /* Dropped to 0 rather than straight to the next job's number. The reset can be
+             * overwritten before anything observes it: the next job announces itself one frame
+             * later, and a SyncVar is only sent when its tick comes round, so the two writes
+             * routinely leave in the same packet — and a client's animator, which samples once
+             * per rendered frame, then sees only the second one.
+             *
+             * That is why the transition out of Printing N tests Printing != N and not
+             * Printing == 0. It says the same thing — this machine has stopped printing sheet
+             * N — but it is true for both outcomes, 0 and N+1, so there is no value the client
+             * has to have caught in time. Do not tidy it back to Equals 0: 0 is a value the
+             * client often never receives, and the machine would sit in Printing N looping
+             * forever. See the transition names in Printer.controller, which say so too. */
+            _printingSlot.Value = 0;
+
             /* Charged on delivery rather than on completion, so the count and the slot only ever
              * move together. The cartridge leaves the slot the moment it is empty, which is what
              * frees it for the next one — and, with a capacity of one, what makes "a cartridge
              * cannot be swapped until it is used up" true without a rule of its own. */
-            _printsRemaining--;
+            int remaining = _printsRemaining.Value - 1;
+            _printsRemaining.Value = remaining;
 
-            if (_printsRemaining > 0)
+            if (remaining > 0)
                 return;
 
-            _printsRemaining = 0;
             _ink.ServerTryRemoveFirst();
         }
 
