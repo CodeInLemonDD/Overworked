@@ -1,0 +1,12 @@
+{
+  "name": "com.facepunch.steamworks",
+  "version": "2.5.2",
+  "displayName": "Facepunch.Steamworks",
+  "description": "Steamworks API wrapper for Unity. Repackaged from the official Facepunch.Steamworks 2.5.2 release binaries as a UPM package. Not an official Facepunch distribution.",
+  "unity": "2021.3",
+  "keywords": [ "steam", "steamworks", "networking", "p2p" ],
+  "author": { "name": "Facepunch Studios", "url": "https://github.com/Facepunch/Facepunch.Steamworks" },
+  "license": "MIT",
+  "documentationUrl": "https://wiki.facepunch.com/steamworks/",
+  "licensesUrl": "https://github.com/Facepunch/Facepunch.Steamworks/blob/master/LICENSE"
+}
