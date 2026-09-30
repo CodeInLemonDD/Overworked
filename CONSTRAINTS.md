@@ -148,6 +148,48 @@ public void RefreshGeometry();                // 换装后重测碰撞体与几�
 
 **索引 -1 表示「prefab 原始样子」** —— 此时 `ApplyPayload` 什么也不做,所以默认路径零成本、**不需要改 prefab 结构**。只有传了真实索引才会清掉原有子节点。
 
+### Payload 的「外观模板 + 数据」分界 —— 关键
+
+**payload prefab 是「一种外观」,不是「一份文件」。**
+
+一份文件由三件事描述,而它们的**数量与增长方式完全不同**:
+
+| 什么 | 例子 | 放在哪 | 会长吗 |
+|---|---|---|---|
+| **种类** | Excel / 合同 / 图片 / 文章 | **prefab**(catalogue 索引) | 固定几种 |
+| **队伍** | A / B | **数据**(`VariantTeam`) | 固定两个 |
+| **编号** | Excel 1、Excel 2、Excel 3… | **数据**(`VariantNumber`) | **每局都长,无上限** |
+
+**编号绝不能烘进 prefab。** 否则就是 `Excel Team A 1.prefab`、`Excel Team A 2.prefab`… 而编号没有上限 —— prefab 数量和 catalogue 索引表会无限膨胀。
+
+**队伍也一样**:如果两个队伍只差一个文字颜色,那它是数据,不该是第二个 prefab。
+
+**接口(已冻结)**:
+
+```csharp
+// NetworkGrabbable
+public int PayloadIndex  { get; }   // 外观模板
+public int VariantNumber { get; }   // 编号,-1 = 不显示
+public int VariantTeam   { get; }   // 队伍,-1 = 不改色
+
+public void ServerSetPayload(int index);
+public void ServerSetVariant(int number, int team);   // 同样在 Spawn 之前调
+```
+
+**插槽(prefab 侧)**:在 payload prefab 上挂 `PayloadLabel`,把要写编号的 `TMP_Text` 指给它,`_teamColours` 按队伍索引填颜色。
+
+```csharp
+public class PayloadLabel : MonoBehaviour
+{
+    public void SetVariant(int number, int team);
+}
+```
+
+`NetworkGrabbable` 在实例化 payload 之后、以及编号/队伍变化时,把这两个值传给 payload 子树里的**所有** `PayloadLabel`。
+
+- **没有 `PayloadLabel` 的 payload 会被跳过,这不是错误** —— 空白纸、墨盒就没有编号
+- **编号变化【不会】重建 payload** —— 只更新文字。重建会顺带重测几何,而重测会把 transform 挪到原点,那在物体已经被拿着或正在飞的时候是看得见的
+
 ### `GrabbableSpawner` 的静态工具
 
 ```csharp
@@ -156,6 +198,8 @@ public static NetworkObject SpawnGrabbable(int payloadIndex, Vector3 position,
 public static void CollectSpawnedGrabbables(NetworkManager manager, List<NetworkGrabbable> buffer);
 public static void DespawnAllGrabbables(NetworkManager manager, List<NetworkGrabbable> buffer);
 ```
+
+`GrabbableSpawner` 自己也有一个 `_payloadIndex`(默认 -1),决定开局那批物体穿什么 —— 它是唯一造物入口,却曾经说不出「造什么」。
 
 **任何需要造一个可抓物体的地方都用 `SpawnGrabbable`** —— 它是唯一入口,免得各模块对「怎么造物体」各有一套。payload 在 spawn **之前**设好,这样它随 spawn 消息一起到达。
 

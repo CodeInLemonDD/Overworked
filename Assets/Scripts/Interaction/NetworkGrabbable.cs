@@ -137,6 +137,35 @@ namespace Overworked.Interaction
         private readonly SyncVar<int> _payloadIndex = new(-1);
 
         /// <summary>
+        /// The document number this object carries, or -1. Replicated.
+        /// </summary>
+        /// <remarks>
+        /// Part of the payload's appearance but deliberately not part of the payload. The number
+        /// has no ceiling, so making it an index into the catalogue would mean a prefab per
+        /// number and a catalogue that grows for the life of the game. A PayloadLabel on the
+        /// payload prefab decides what to do with it; a payload with no number ignores it.
+        /// </remarks>
+        private readonly SyncVar<int> _variantNumber = new(-1);
+
+        /// <summary>
+        /// The team the document on this object belongs to, or -1. Replicated.
+        /// </summary>
+        /// <remarks>
+        /// A value rather than a second payload index, for the same reason: the two teams'
+        /// documents differ by a text colour, not by a model.
+        /// </remarks>
+        private readonly SyncVar<int> _variantTeam = new(-1);
+
+        /// <summary>
+        /// The payload instance currently attached, or null.
+        /// </summary>
+        /// <remarks>
+        /// Held so a variant change can reach its labels without tearing the payload down and
+        /// building it again — which would also re-measure the geometry and move the transform.
+        /// </remarks>
+        private GameObject _payload;
+
+        /// <summary>
         /// Server-only: the cell this object was last placed on. Not replicated; clients
         /// re-derive placement from a raycast, and only the server needs to arbitrate races.
         /// </summary>
@@ -182,6 +211,16 @@ namespace Overworked.Interaction
         /// Which payload this object wears, or -1 when it is using the prefab's authored look.
         /// </summary>
         public int PayloadIndex => _payloadIndex.Value;
+
+        /// <summary>
+        /// The document number this object carries, or -1.
+        /// </summary>
+        public int VariantNumber => _variantNumber.Value;
+
+        /// <summary>
+        /// The team the document on this object belongs to, or -1.
+        /// </summary>
+        public int VariantTeam => _variantTeam.Value;
 
         /// <summary>
         /// Server-only: the cell this object was last placed on.
@@ -266,6 +305,28 @@ namespace Overworked.Interaction
         }
 
         /// <summary>
+        /// Server: sets the number and team drawn on this object, for payloads that show them.
+        /// </summary>
+        /// <remarks>
+        /// Set before spawning, like the payload index and for the same reason: the values have
+        /// to travel in the spawn message, because SyncVar.OnChange does not fire for an initial
+        /// value. Payloads with no label ignore both.
+        ///
+        /// Not marked [Server] — see ServerSetPayload.
+        /// </remarks>
+        public void ServerSetVariant(int number, int team)
+        {
+            if (!FishNet.InstanceFinder.IsServerStarted)
+            {
+                Debug.LogWarning($"{nameof(ServerSetVariant)} was called on a peer that is not the server; ignored.", this);
+                return;
+            }
+
+            _variantNumber.Value = number;
+            _variantTeam.Value = team;
+        }
+
+        /// <summary>
         /// Attaches the payload named by the current index, on every peer.
         /// </summary>
         /// <remarks>
@@ -308,12 +369,47 @@ namespace Overworked.Interaction
                 Destroy(old);
             }
 
-            GameObject payload = Instantiate(prefab, root);
-            payload.transform.localPosition = Vector3.zero;
-            payload.transform.localRotation = Quaternion.identity;
-            payload.transform.localScale = Vector3.one;
+            _payload = Instantiate(prefab, root);
+            _payload.transform.localPosition = Vector3.zero;
+            _payload.transform.localRotation = Quaternion.identity;
+            _payload.transform.localScale = Vector3.one;
 
+            ApplyVariant(_payload);
             RefreshGeometry();
+        }
+
+        /// <summary>
+        /// Writes the document number and team into every label on a payload.
+        /// </summary>
+        /// <remarks>
+        /// Separate from building the payload so a number change does not rebuild it: the two
+        /// are independent, and rebuilding would also re-measure the geometry, which moves the
+        /// transform to the origin while it measures.
+        ///
+        /// A payload with no PayloadLabel — blank paper, an ink cartridge — has nothing to
+        /// update, which is not an error.
+        /// </remarks>
+        private void ApplyVariant(GameObject payload)
+        {
+            if (payload == null)
+                return;
+
+            foreach (PayloadLabel label in payload.GetComponentsInChildren<PayloadLabel>(includeInactive: true))
+                label.SetVariant(_variantNumber.Value, _variantTeam.Value);
+        }
+
+        /// <summary>
+        /// Applies a variant change, once per change.
+        /// </summary>
+        /// <remarks>
+        /// Same duplicate as every other SyncType: a host sees its own write and the echoed read.
+        /// </remarks>
+        private void OnVariantChanged(int prev, int next, bool asServer)
+        {
+            if (asServer && IsClientStarted)
+                return;
+
+            ApplyVariant(_payload);
         }
 
         /// <summary>
@@ -337,6 +433,8 @@ namespace Overworked.Interaction
 
             _state.OnChange += OnStateChanged;
             _payloadIndex.OnChange += OnPayloadChanged;
+            _variantNumber.OnChange += OnVariantChanged;
+            _variantTeam.OnChange += OnVariantChanged;
 
             /* SyncVar.OnChange does not fire for the initial value, so a client that joins
              * while the object is already held would otherwise never apply the state. The
@@ -352,6 +450,8 @@ namespace Overworked.Interaction
 
             _state.OnChange -= OnStateChanged;
             _payloadIndex.OnChange -= OnPayloadChanged;
+            _variantNumber.OnChange -= OnVariantChanged;
+            _variantTeam.OnChange -= OnVariantChanged;
         }
 
         public override void OnStartClient()
