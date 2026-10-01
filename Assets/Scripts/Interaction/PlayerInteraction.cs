@@ -637,10 +637,14 @@ namespace Overworked.Interaction
 
             Transform hold = HoldTransform;
 
-            /* Rotation is pinned to identity while held so the object stays upright and
-             * axis-aligned — the same orientation it will have once snapped to a cell. It
-             * only tumbles freely once it is loose again. */
-            _carried.transform.SetPositionAndRotation(hold.position, Quaternion.identity);
+            /* Turns with the player, but only about the vertical. Following the hold point
+             * outright would let a tilted hold tilt the object, and half of the old rule is
+             * worth keeping: a carried thing stays upright. The other half — that it is
+             * axis-aligned — was never this line's to enforce, because the capture already
+             * writes identity into the rotation the moment the object is set down. Pinning it
+             * here only meant a sheet of paper kept facing north while its carrier faced east. */
+            Quaternion facing = Quaternion.Euler(0f, hold.eulerAngles.y, 0f);
+            _carried.transform.SetPositionAndRotation(hold.position, facing);
 
             if (_interactAction == null)
                 return;
