@@ -21,20 +21,29 @@ namespace Overworked.UI
     ///
     /// Cosmetic only: no collider, no rigidbody, nothing replicated. It is a picture on a lid, and
     /// it is built locally by each peer from data it already has.
+    ///
+    /// **Deliberately not `[RequireComponent(typeof(SupplyBox))]`.** That attribute reads as a
+    /// tidy way to say "this needs a box", and it does the opposite of tidy: attaching this to any
+    /// object that has no box makes Unity silently add a second one, on that object, with nothing
+    /// assigned. Two boxes in one hierarchy then share a container and restock it twice as fast,
+    /// and which of them answers a press is whichever the search happens to reach first. The check
+    /// below reports the mistake instead of creating it.
     /// </remarks>
     [DisallowMultipleComponent]
-    [RequireComponent(typeof(SupplyBox))]
     public class BoxBadge : MonoBehaviour
     {
         /// <summary>
         /// Where the logo goes.
         /// </summary>
         /// <remarks>
-        /// A child of the box, not the box itself — the slot is emptied before the logo is put
-        /// in, and pointing it at the root would take the machine with it. Checked below rather
-        /// than left to be discovered.
+        /// A node that is not the box's own root — the slot is emptied before the logo is put in,
+        /// so pointing it at the root would take the machine with it. Checked below rather than
+        /// left to be discovered.
+        ///
+        /// This may be the node the badge component itself sits on, which is the tidiest place to
+        /// put it: an empty child of the box, with the logo drawn into it.
         /// </remarks>
-        [Tooltip("The child node the logo is placed on. Must not be the box's own root — the slot is emptied before the logo is drawn.")]
+        [Tooltip("The node the logo is placed on. Must not be the box's own root — the slot is emptied before the logo is drawn.")]
         [SerializeField]
         private Transform _slot;
 
@@ -47,6 +56,17 @@ namespace Overworked.UI
 
         private void Start()
         {
+            /* Searched upwards, so this component can sit on the logo's own node rather than
+             * having to be on the box beside the SupplyBox. */
+            SupplyBox box = GetComponentInParent<SupplyBox>();
+            if (box == null)
+            {
+                Debug.LogError(
+                    $"{nameof(BoxBadge)} on {gameObject.name} found no {nameof(SupplyBox)} above it, so it has no payload to draw a logo for.",
+                    this);
+                return;
+            }
+
             if (_catalogue == null)
             {
                 Debug.LogError(
@@ -63,17 +83,13 @@ namespace Overworked.UI
                 return;
             }
 
-            if (_slot == transform)
+            if (_slot == box.transform)
             {
                 Debug.LogError(
-                    $"{nameof(BoxBadge)} on {gameObject.name} has its own root as the slot. The slot is emptied before the logo is drawn, so this would delete the box. Point it at a child.",
+                    $"{nameof(BoxBadge)} on {gameObject.name} has the box's own root as its slot. The slot is emptied before the logo is drawn, so this would delete the box. Point it at a child.",
                     this);
                 return;
             }
-
-            SupplyBox box = GetComponent<SupplyBox>();
-            if (box == null)
-                return;
 
             GameObject badge = _catalogue.GetBadge(box.PayloadIndex);
 
