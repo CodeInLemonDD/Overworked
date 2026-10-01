@@ -6,34 +6,29 @@ namespace Overworked.Visuals
     /// Builds the pictures of objects that get drawn inside machines and on their fronts.
     /// </summary>
     /// <remarks>
-    /// Three components draw a prefab somewhere it is not a real thing — the container view, the
-    /// printer's pile and the badge on a box. Two of them had already grown their own copy of the
-    /// same stripping pass, word for word, which is the point at which a third copy stops being
-    /// duplication and starts being three places to fix.
+    /// Three components now draw a prefab somewhere it is not a real thing — the container view,
+    /// the printer's pile and the badge on a box. Two of them had already grown their own copy of
+    /// the same stripping pass, word for word, which is the point at which a third copy stops
+    /// being duplication and starts being three places to fix.
     ///
     /// What lives here is only what was genuinely identical. Clearing a slot is not: a container
     /// view tracks its own visuals across rebuilds and the others clear a slot's children, so
-    /// each keeps the version it needs.
-    ///
-    /// **A payload is always drawn at the size its own prefab was authored at.** The slot decides
-    /// where it goes and which way it faces, and nothing else. That is not tidiness: the same
-    /// payload is drawn in a hand, in a pile, on a lid and, later, in a folder, and the only
-    /// thing that can keep those agreeing is the prefab. The alternative — letting whatever node
-    /// a slot happens to hang under scale the copy — means a machine's art tree can quietly resize
-    /// its own contents, and the printer's does: its pile slots sit under a table node squashed to
-    /// eight tenths, under a container node squashed to a hundredth. Cancelling those by hand
-    /// takes one number per squashed ancestor and nothing checks that the set is complete. It was
-    /// not.
+    /// each keeps the version it needs. It is here because two callers want exactly this and a
+    /// third was about to.
     /// </remarks>
     public static class CosmeticCopy
     {
         /// <summary>
-        /// Instantiates a prefab into a slot at the slot's own origin, at the prefab's own size.
+        /// Instantiates a prefab into a slot, sitting at the slot's own origin.
         /// </summary>
         /// <remarks>
+        /// The local transform is reset rather than left to whatever the prefab was authored
+        /// with: the slot decides where the copy goes, and a prefab carrying an offset would
+        /// otherwise land somewhere different in every slot it was used in.
+        ///
         /// Does not clear the slot. Callers that may already have something there clear it first,
-        /// and they do so after resolving the prefab — an index the catalogue cannot answer should
-        /// leave the authored placeholder in place rather than empty the slot.
+        /// and they do so after resolving the prefab — an index the catalogue cannot answer
+        /// should leave the authored placeholder in place rather than empty the slot.
         /// </remarks>
         /// <returns>The copy, or null when there is nothing to instantiate.</returns>
         public static GameObject Instantiate(Transform slot, GameObject prefab)
@@ -44,50 +39,15 @@ namespace Overworked.Visuals
             GameObject copy = Object.Instantiate(prefab, slot);
             copy.transform.localPosition = Vector3.zero;
             copy.transform.localRotation = Quaternion.identity;
-            copy.transform.localScale = LocalScaleFor(slot, prefab);
 
+            /* Scale is deliberately left alone. Position and rotation are the slot's to decide --
+             * where the copy sits and which way it faces -- but a prefab's own scale is part of
+             * how it looks, exactly like its mesh. Flattening is how these logos are made: the
+             * badge prefabs are authored with one axis at a hundredth, and forcing the copy back
+             * to unit scale un-flattens them into solid blocks. */
             Strip(copy);
             return copy;
         }
-
-        /// <summary>
-        /// The local scale an object needs so it comes out at the size its prefab was authored at,
-        /// wherever it has been put.
-        /// </summary>
-        /// <remarks>
-        /// A parent's scale multiplies into everything below it, so undoing it is a division. The
-        /// result is exact for a chain with no rotation on it, which is every slot in this project,
-        /// and close enough elsewhere — a rotated and non-uniformly scaled parent is the one case
-        /// where a scale cannot be expressed as a single vector at all, and Unity's own
-        /// lossyScale is already an approximation there.
-        ///
-        /// The rotation is reset separately, so by the time this matters the copy's own
-        /// contribution to any skew is gone.
-        ///
-        /// A zero on any axis of the inherited scale cannot be divided out — nothing drawn under
-        /// such a node can have a size — so that axis is left at the prefab's own value rather
-        /// than turned into an infinity.
-        /// </remarks>
-        public static Vector3 LocalScaleFor(Transform parent, GameObject prefab)
-        {
-            Vector3 wanted = prefab.transform.localScale;
-
-            if (parent == null)
-                return wanted;
-
-            Vector3 inherited = parent.lossyScale;
-
-            return new Vector3(
-                Undo(inherited.x, wanted.x),
-                Undo(inherited.y, wanted.y),
-                Undo(inherited.z, wanted.z));
-        }
-
-        /// <summary>
-        /// Divides the inherited scale back out of one axis, guarding the zero.
-        /// </summary>
-        private static float Undo(float inherited, float wanted) =>
-            Mathf.Abs(inherited) < 1e-6f ? wanted : wanted / inherited;
 
         /// <summary>
         /// Empties a slot, so nothing it held answers a query for the rest of the frame.

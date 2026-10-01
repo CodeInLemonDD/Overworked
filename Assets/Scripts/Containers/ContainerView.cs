@@ -147,17 +147,15 @@ namespace Overworked.Containers
                 if (prefab == null)
                     continue;
 
-                GameObject visual = CosmeticCopy.Instantiate(Root, prefab);
-                if (visual == null)
-                    continue;
-
+                GameObject visual = Instantiate(prefab, Root);
                 visual.transform.localPosition = _itemOffset + _itemStep * slot;
-
-                /* The stand-ins are a stack, so it is drawn at a scale of its own choosing --
-                 * applied on top of the copy's true size rather than instead of it. Replacing the
-                 * scale outright would flatten every prefab authored with one axis shorter than
-                 * the others. */
+                visual.transform.localRotation = Quaternion.identity;
+                /* Multiplied into the prefab's own scale rather than replacing it. Payload
+                 * prefabs carry their size on the root -- one axis is often a hundredth of the
+                 * others -- so overwriting it draws a flattened sheet as a solid block. */
                 visual.transform.localScale *= _itemScale;
+
+                CosmeticCopy.Strip(visual);
 
                 _visuals.Add(visual);
                 slot++;
