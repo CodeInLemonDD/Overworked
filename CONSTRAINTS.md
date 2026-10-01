@@ -5,7 +5,7 @@
 1. **硬约束** —— 读 FishNet 4.7.3 源码核实过的,和玩法无关,换多少轮设计都不变,但违反任何一条都会当场坏掉
 2. **已冻结的接口** —— P0 产出的容器与 payload 机制,依赖它的模块按这里的签名写,不要自己另起一套
 
-最后更新:2026-09-29
+最后更新:2026-10-01
 
 ---
 
@@ -52,6 +52,14 @@
 | 13 | **`TimeManager.OnUpdate` 跑在 tick 【之前】** —— 默认 `_updateOrder = BeforeTick`,而 `TickUpdate()` 每帧只调一次 `OnUpdate`。「每帧一次」成立,「在 tick 之后」**不成立** | `TimeManager.cs:158, 366-385` |
 | 14 | **`NetworkBehaviour` 上的 `OnValidate` 必须 `override`,不能隐藏。** 基类是 `protected virtual` 且会调 `TryAddNetworkObject()`(编辑器里自动解析 NetworkObject 引用);写成 `private void OnValidate()` 会**静默停掉它**。weaver **不**接管 `OnValidate`,所以没有「它自会处理」这回事 | `NetworkBehaviour.cs:206-214` |
 | 15 | **`Awake()` 的 CS0114 是本项目基线,不要"修"。** weaver 把用户的 `Awake` 改名成 `Awake_UserLogic_*` 再生成一个真正的 `Awake` 串起网络初始化 —— 所以 `TickNetworkBehaviour` 子类里就是写 `private void Awake()`,不要改成 `override` | `NetworkBehaviourHelper.cs:73` |
+| 16 | **`TargetRpc` 的第一个参数必须是 `NetworkConnection`** —— 编织期**硬错误**,不是警告:`Target RPC xxx must have a NetworkConnection as the first parameter.`。`ServerRpc` 的连接参数则是**可选的**,并且按惯例放最后 | `CodeGenerating/Processing/Rpc/Attributes.cs:120-128` |
+| 17 | **RPC 方法三条通用限制**:不能有泛型参数、不能是 `abstract`、必须返回 `void`。同样是编织期报错 —— 这也是 `StationBase` 要「具体方法挂 `[Server]`、抽象方法当扩展点」的另一半原因 | `CodeGenerating/Processing/Rpc/Attributes.cs:97-116` |
+| 18 | **`[TargetRpc, ObserversRpc]` 可以叠加在同一个方法上,`ServerRpc` 不能和任何 RPC 组合** | `CodeGenerating/Processing/Rpc/Attributes.cs:71` |
+
+> **注意 `Attributes.cs` 有七个同名文件。** 上面第 4 条引的 `Attributes.cs:45-55` 指的是
+> `Runtime/Object/NetworkBehaviour/Attributes.cs`(属性定义),而 16–18 条引的是
+> `CodeGenerating/Processing/Rpc/Attributes.cs`(编织器的**校验器**)。
+> 找约束时先确认是哪一个,否则会在错误的文件里翻半天。
 
 ### 项目层面
 
