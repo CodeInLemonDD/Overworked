@@ -4,6 +4,7 @@ using FishNet.Object;
 using FishNet.Object.Synchronizing;
 using FishNet.Transporting;
 using Overworked.Containers;
+using Overworked.Visuals;
 using UnityEngine;
 
 namespace Overworked.Interaction
@@ -418,12 +419,16 @@ namespace Overworked.Interaction
             _payload.transform.localPosition = Vector3.zero;
             _payload.transform.localRotation = Quaternion.identity;
 
-            /* Scale is deliberately not touched, here or in CosmeticCopy. A payload prefab's own
-             * scale is part of how it looks, exactly like its mesh: paper and ink are drawn as
-             * flattened slabs, with one axis a fraction of the others, and forcing the copy to
-             * unit scale turns every sheet into a block. Do not add a line back to normalise it --
-             * three copies of that line existed, and each one was invisible until the first
-             * prefab was authored at anything other than unit scale. */
+            /* Sized by the prefab, not by whatever this lands under. A payload prefab's own scale
+             * is part of how it looks, exactly like its mesh: paper and ink are drawn as flattened
+             * slabs, with one axis a fraction of the others. The shell this hangs from is at unit
+             * scale so this changes nothing today -- it is here so that pointing _payloadRoot at a
+             * scaled node, which is what the field is for, does not quietly resize the object.
+             *
+             * Do not simplify this to a plain Vector3.one or drop it. Three copies of a
+             * unit-scale reset existed in this project and every one was invisible until a prefab
+             * was first authored at anything other than unit scale. */
+            _payload.transform.localScale = CosmeticCopy.LocalScaleFor(root, prefab);
 
             ApplyVariant(_payload);
             RefreshGeometry();
