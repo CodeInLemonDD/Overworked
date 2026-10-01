@@ -79,18 +79,21 @@ Printer (根)
 ├─ 墨槽 (子物件)          ← 已有节点
 │   └─ ContainerBase      ← 墨,容量 1      【不挂 ContainerView】
 │
+├─ 队列 (子物件,新建)     ← 任务队列,文档数据层那一轮加的
+│   └─ ContainerBase      ← 待打印的文档,容量 5  【不挂 ContainerView】
+│
 └─ 输出 (子物件)          ← 已有节点
     ├─ ContainerBase      ← 输出,容量 6    【不挂 ContainerView】
     └─ 打印好的纸1..6      ← 视觉由动画 + PrinterDisplay 负责
 ```
 
-**三个容器各自挂在自己的节点上,不要挂在根上。**
+**四个容器各自挂在自己的节点上,不要挂在根上。**
 
-**三个都【不要】挂 `ContainerView`:**
+**四个都【不要】挂 `ContainerView`:**
 
 - `输出` —— 你已经有 `打印好的纸1..6` 六个槽位了。动画负责开关、`PrinterDisplay` 负责填内容。
   再挂一个 `ContainerView` 会在同一位置又实例化一批 prefab,两套视觉叠在一起。
-- `纸槽` / `墨槽` —— 只关心「还剩多少」,顺序没有意义,该用指示灯 / 滚动条,不该用纸堆。
+- `纸槽` / `墨槽` / `队列` —— 只关心「还剩多少」,顺序没有意义,该用指示灯 / 滚动条,不该用纸堆。
   纸塞进去就是数据了,把它重新画成物理纸堆和容器模型本身是矛盾的。
 
 **判据:容器的可视化用「堆」还是「表」,看它的顺序有没有意义。** 输出的顺序有意义
@@ -104,15 +107,15 @@ Printer (根)
 |---|---|---|
 | 根 | `NetworkObject` | 加上(**容器要同步,必须有**) |
 | 根 `Printer` | `_paper` | **`纸槽`** 的 `ContainerBase` |
-| | `_ink` | `Ink` 的 `ContainerBase` |
-| | `_output` | `Output` 的 `ContainerBase` |
+| | `_ink` | `墨槽` 的 `ContainerBase` |
+| | `_output` | `输出` 的 `ContainerBase` |
+| | `_queue` | `队列` 的 `ContainerBase` |
 | | `_paperPayloadIndex` | **0** |
 | | `_inkPayloadIndex` | **1** |
-| | `_outputPayloadIndex` | **2** |
-| | `_secondsPerOutput` | `3`(盲设,要试玩调 —— 应**明显小于**「跑到原料箱再跑回来」的时间) |
+| | `_secondsPerOutput` | `2`(**必须**和 `Printing` 片段的 2.000 秒一致,否则动画放完机器会干等) |
 | | `_printsPerCartridge` | `8` |
 | | `_intakeCentre` / `_intakeHalfExtents` | 选中机器看 Gizmo 调,**绿框要盖住桌面**;上沿必须高过物体落在机器顶面后的位置 |
-| 三个槽位 | (不挂 `ContainerView`,理由见上方结构说明) | — |
+| 四个容器 | (都不挂 `ContainerView`,理由见上方结构说明) | — |
 
 容器容量填在 **`ContainerBase._capacity`** 上,不是 `Printer` 上。
 
@@ -125,7 +128,11 @@ Printer (根)
 
 本机**不需要** `SnapSurface` —— 机器占住那格,那格本来就不该能放东西。
 
-启动时机器会自己检查容量是不是 6 / 1、`_printsPerCartridge` 是不是正数,不对会在 Console 报警告。
+启动时机器会自己检查:四个容器**都接上了没**、有没有**接重**、纸和墨的容量是不是 6 / 1、
+输出是不是 6、队列是不是**无限容量**(是就警告),以及 `_printsPerCartridge` 是不是正数。
+
+> **打印机依赖场景里的 `DocumentStore`。** 没有它,堆上会保留美术摆的占位纸、打印头什么都不显示 ——
+> 那是设计好的降级(不是崩溃),但机器**一份也打不出来**,因为没有文档能进队列。
 
 ---
 
@@ -178,7 +185,57 @@ PaperBox (根)
 
 ---
 
-## 第 7 步 · 把工位摆进场
+## 第 7 步 · 场景 · `DocumentStore`
+
+**没有它,打印机一份也打不出来。** 队列里进不去文档,堆上会保留美术摆的占位纸 —— 那是设计好的降级,不是崩溃。
+
+| 做什么 | 填 |
+|---|---|
+| 场景新建空物体(名字随意,如 `Document Store`) | **保持激活** |
+| 挂 `NetworkObject` | `Is Networked` ✅、`Is Global` ⬜ |
+| | **不要加 `NetworkTransform`** —— 它不动 |
+| 挂 `DocumentStore` | 没有字段 |
+
+建完选中一次让它跑 `OnValidate`,然后跑一次
+**`Fish-Networking → Utility → Reserialize NetworkObjects → Reserialize Scenes`**,确认 `SceneId` 非 0。
+**`SceneId` 为 0 时不要打包**(构建期抛异常)。
+
+**顺带:建 `DocumentCatalogue` 资产**(Create → Overworked → Document Catalogue),
+按 `PayloadCatalogue` 的顺序填 `PayloadIndex`。`FetchSeconds` 至今没有任何代码读它 —— 填 0 就行。
+
+**验收**:控制台敲 `printers`,不报错、能列出机器。
+
+---
+
+## 第 8 步 · `Computer.prefab`(新建,**自带模型桌子**)
+
+```
+Computer (根)
+├─ 模型桌子 + 电脑模型
+├─ NetworkObject
+├─ PlacementBlocker
+├─ 碰撞体(要覆盖机器正面 —— 工位靠它被玩家的扇区检测找到)
+├─ Computer
+└─ ComputerPanel        ← 挂在根上,或者任何「永远不会被关掉」的子物件上
+```
+
+| 组件 | 字段 | 填 |
+|---|---|---|
+| 根 `Computer` | `_catalogue` | `DocumentCatalogue` 资产 |
+| | `_interactReach` | 默认 `2.5` |
+| `ComputerPanel` | `_font` | `Assets/Font/simhei SDF.asset`(**必须**,不填就是一窗方块) |
+| | `_sortingOrder` | `10`(默认。**必须 ≥ 1**) |
+
+**两个坑:**
+
+- **`ComputerPanel` 不能挂在会被关掉的子物件上** —— 面板的 canvas 建在它自己下面,父物件不激活就没人看得见。代码会报错说这件事
+- **它是本项目唯一带 `GraphicRaycaster` 的 UI**,这是故意的(面板要能点)。前提是它锚在**屏幕右侧**、不做全屏遮罩 —— 别把它挪到左上角,那里有 MPPM 要用的 Host / Client 按钮
+
+本机**不需要** `SnapSurface`,也**不要**挂 `ContainerView`。
+
+---
+
+## 第 9 步 · 把工位摆进场
 
 打印机和原料箱各摆若干,**位置落在格中心**。
 
@@ -206,6 +263,22 @@ PaperBox (根)
 | 8 | 连续走 → 体力变化,**两个实例位置是否一致** | 拉扯感 ← W5 唯一的真验收标准 |
 | 9 | RTT 下 HUD 的容器行 | 显示 `payload 0` 而不是「纸」→ catalogue 或索引没接上 |
 | 10 | 左上角 Host 按钮 | 点不动 → HUD 挂了 `GraphicRaycaster` |
+
+### 文档链路(第二轮)—— 用控制台铺路,不必等电脑面板
+
+`document 1` → `queue 0 0` → 等机器打完 → 取走。这几条是这轮唯一的端到端证明。
+
+| # | 测 | 错了会看到 |
+|---|---|---|
+| 11 | `document 1` 然后 `queue 0 0`,等机器打完 | 堆上还是空白纸 → `PrinterDisplay` 没接 `DocumentStore`,或 `PayloadLabel._texts` 没填 |
+| 12 | **再 `document 1`(会拿到编号 2)然后 `queue`,`#1` 还在堆上时产出 `#2`** | 编号停在旧的 ← **`PrinterDisplay` 认的是外观不是身份**,那是这轮第一个真 bug |
+| 13 | 取一份产出的纸拿在手里 | 手里那张没有编号 / 队伍颜色 |
+| 14 | 打开电脑面板,点「打印到 #1」 | 面板不关 / 打印机队列没变 → `Printer.Queue` 链路 |
+| 15 | **面板开着**点左上角 Host 按钮 | 点不动 → 面板挪到左上角去了,或被人加了全屏遮罩 |
+| 16 | 面板开着按 Esc | 关不掉,或关了但人动不了 → `SetInputEnabled` 没还回去 |
+
+> **第 12 条单独拎出来。** 不修 `PrinterDisplay` 的话,11 是**过得去**的 —— 第一份文档编号对,
+> 你会以为通了;到 12 才发现编号不跟着换。这是最容易得出错误结论的一条。
 
 **注意第 4 条**:如果它失败,说明纸墨又回到共用一个容器了 —— 那会**永久卡死机器**
 (塞满纸 → 墨进不来 → 配方永远凑不齐 → 而机器从不退还输入)。

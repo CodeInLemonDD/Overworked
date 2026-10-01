@@ -67,12 +67,15 @@ namespace Overworked.Stations
         /// Used only to check the index above at startup.
         /// </summary>
         /// <remarks>
-        /// Optional, and used for nothing else. An out-of-range index does not fail anywhere
-        /// visible — the object is still made, just wearing the prefab's original look — so
-        /// without this check a mis-set index reads as "the box hands out a featureless cube"
-        /// rather than as a wiring mistake.
+        /// Required as soon as <see cref="_payloadIndex"/> names anything, and used for nothing
+        /// else. An index nothing can resolve does not fail anywhere visible — the object is still
+        /// made, just wearing the prefab's original look — so without this check a mis-set index
+        /// reads as "the box hands out a featureless cube" rather than as a wiring mistake.
+        ///
+        /// Optional only on the -1 path, where "the prefab exactly as authored" is the answer the
+        /// index already gives and there is nothing to look up.
         /// </remarks>
-        [Tooltip("Optional. Only used to check the payload index at startup, so a mis-set index is reported instead of silently handing out unmodified objects.")]
+        [Tooltip("Required when the payload index above names anything. Only used to check that index at startup.")]
         [SerializeField]
         private PayloadCatalogue _catalogue;
 
@@ -143,8 +146,26 @@ namespace Overworked.Stations
                 return;
             }
 
-            if (_payloadIndex >= 0 && _catalogue != null && !_catalogue.TryGet(_payloadIndex, out _))
-                Debug.LogError($"{nameof(PaperBox)} on {gameObject.name} points at payload index {_payloadIndex}, which the assigned catalogue does not define; it will hand out unmodified objects.", this);
+            /* Split in two so the likelier mistake gets its own message. Pointing at an index with
+             * no catalogue to resolve it against used to pass in silence — nothing was checked at
+             * all — and that is the one case where the box hands out bare prefabs while looking
+             * correctly configured in the Inspector. */
+            if (_payloadIndex >= 0 && _catalogue == null)
+            {
+                Debug.LogError(
+                    $"{nameof(PaperBox)} on {gameObject.name} names payload index {_payloadIndex} but has no " +
+                    $"{nameof(PayloadCatalogue)} assigned, so nothing can resolve it; it will hand out unmodified " +
+                    "objects. Assign the same catalogue everything else uses, or set the index to -1 if bare " +
+                    "prefabs are what you want.",
+                    this);
+            }
+            else if (_payloadIndex >= 0 && !_catalogue.TryGet(_payloadIndex, out _))
+            {
+                Debug.LogError(
+                    $"{nameof(PaperBox)} on {gameObject.name} points at payload index {_payloadIndex}, which the " +
+                    "assigned catalogue does not define; it will hand out unmodified objects.",
+                    this);
+            }
 
             FillStock();
         }
@@ -159,11 +180,23 @@ namespace Overworked.Stations
         /// </remarks>
         private void FillStock()
         {
-            /* An unlimited container has no cap to fill towards, so the loop below would not run
-             * and the box would simply start empty. Say so, rather than let it look broken. */
+            /* An unlimited container has no cap to fill towards, so there is nothing to restock
+             * into: the loop below would not run and the box would start empty, which is the exact
+             * state this method exists to avoid. Filling to an invented number would be inventing a
+             * rule, so the mistake is reported and the box carries on as it is.
+             *
+             * Warned rather than errored, matching the printer: the box still works, and what is
+             * lost is the material constraint the restock rate is built around. Not left silent,
+             * because capacity zero is ContainerBase's default — a ContainerBase added without its
+             * capacity filled in lands here, and an unbounded box then grows its list without limit
+             * for every client that joins later. */
             if (_container.IsUnlimited)
             {
-                Debug.LogWarning($"{nameof(PaperBox)} on {gameObject.name} has an unlimited container; the restock rate is the only limit on how much it can give away.", this);
+                Debug.LogWarning(
+                    $"{nameof(PaperBox)} on {gameObject.name} has an unlimited container, so it has no buffer to " +
+                    "restock into and starts empty. Set its capacity to the number of sheets the box should hold " +
+                    "(a small one — the walk is meant to be the price of a sheet).",
+                    this);
                 return;
             }
 

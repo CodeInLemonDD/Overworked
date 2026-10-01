@@ -1,4 +1,5 @@
 using Overworked.Containers;
+using Overworked.Documents;
 using UnityEngine;
 
 namespace Overworked.Stations
@@ -82,12 +83,12 @@ namespace Overworked.Stations
         private Transform _printingSheet;
 
         /// <summary>
-        /// Payload index currently instantiated in each slot, or -1 for the authored placeholder.
+        /// Document id currently drawn in each slot, or -1 for the authored placeholder.
         /// </summary>
         private int[] _shown;
 
         /// <summary>
-        /// Payload index currently instantiated on the print head, or -1.
+        /// Document id currently drawn on the print head, or -1.
         /// </summary>
         private int _shownPrinting = -1;
 
@@ -151,7 +152,7 @@ namespace Overworked.Stations
         }
 
         /// <summary>
-        /// Makes every drawn slot show the entry that belongs in it.
+        /// Makes every drawn slot show the document that belongs in it.
         /// </summary>
         /// <remarks>
         /// Slots past the end of the output are left as they are. They are hidden by the
@@ -166,14 +167,21 @@ namespace Overworked.Stations
             {
                 if (!output.TryGetEntry(i, out ContainerEntry entry))
                     continue;
+                if ((ContainerEntryKind)entry.Kind != ContainerEntryKind.Data)
+                    continue;
 
-                if (_slots[i] == null || _shown[i] == entry.PayloadIndex)
+                /* Keyed on the document, not on its appearance. Two documents printed from the
+                 * same template share a payload index and differ only in the number drawn on
+                 * them, so comparing payloads would leave the second one showing the first one's
+                 * number: the pile would look right and read wrong, which is worse than looking
+                 * wrong. */
+                if (_slots[i] == null || _shown[i] == entry.DataId)
                     continue;
 
                 /* Only remembered once something was actually put there, so a slot that could
                  * not be filled is retried instead of being written off. */
-                if (ReplaceContent(_slots[i], entry.PayloadIndex))
-                    _shown[i] = entry.PayloadIndex;
+                if (ReplaceContent(_slots[i], entry.DataId))
+                    _shown[i] = entry.DataId;
             }
         }
 
@@ -221,30 +229,39 @@ namespace Overworked.Stations
             if (_printingSheet == null)
                 return;
 
-            int payload = _printer.PrintingPayload;
-            if (_printer.PrintingSlot == 0 || payload < 0 || payload == _shownPrinting)
+            int documentId = _printer.PrintingDocument;
+            if (_printer.PrintingSlot == 0 || documentId < 0 || documentId == _shownPrinting)
                 return;
 
-            if (ReplaceContent(_printingSheet, payload))
-                _shownPrinting = payload;
+            if (ReplaceContent(_printingSheet, documentId))
+                _shownPrinting = documentId;
         }
 
         /// <summary>
-        /// Puts a document prefab into a slot, replacing whatever is there.
+        /// Draws a document in a slot, replacing whatever is there.
         /// </summary>
         /// <remarks>
-        /// The prefab is resolved before anything is destroyed, so an index the catalogue
-        /// cannot answer leaves the authored placeholder in place rather than emptying the
-        /// slot. A machine whose catalogue is not filled in yet shows its stand-ins rather
-        /// than blank holes.
+        /// Everything about the sheet is looked up from the document: which template it is
+        /// printed on, and what is written on it. What the container holds says only which
+        /// document it is, so a store that cannot answer means there is nothing to draw.
+        ///
+        /// Nothing is resolved before everything is: the document, the template and the label
+        /// are all in hand before the slot is cleared. A machine whose catalogue is unfilled, or
+        /// whose store has not replicated yet, therefore keeps showing whatever it was showing
+        /// instead of emptying the slot — the failure mode of a half-configured prefab should be
+        /// the stand-ins the artist authored, not holes.
         /// </remarks>
         /// <returns>True when something was placed in the slot.</returns>
-        private bool ReplaceContent(Transform slot, int payloadIndex)
+        private bool ReplaceContent(Transform slot, int documentId)
         {
             if (slot == null)
                 return false;
 
-            GameObject prefab = _catalogue.Get(payloadIndex);
+            DocumentStore store = DocumentStore.Instance;
+            if (store == null || !store.TryGet(documentId, out DocumentRecord document))
+                return false;
+
+            GameObject prefab = _catalogue.Get(document.PayloadIndex);
             if (prefab == null)
                 return false;
 
@@ -256,7 +273,26 @@ namespace Overworked.Stations
             content.transform.localScale = Vector3.one;
 
             MakeCosmetic(content);
+            ApplyLabel(content, document);
+
             return true;
+        }
+
+        /// <summary>
+        /// Writes the document's number and team into every label on a drawn copy.
+        /// </summary>
+        /// <remarks>
+        /// The same thing <see cref="Interaction.NetworkGrabbable"/> does for a sheet in
+        /// someone's hands, and it has to happen here too: a template on its own is a blank
+        /// form, and the number is the whole of what tells one printed document from another.
+        ///
+        /// A payload with no PayloadLabel — blank paper, an ink cartridge — has nothing to write
+        /// into, which is not an error.
+        /// </remarks>
+        private static void ApplyLabel(GameObject content, in DocumentRecord document)
+        {
+            foreach (PayloadLabel label in content.GetComponentsInChildren<PayloadLabel>(includeInactive: true))
+                label.SetVariant(document.Number, document.Team);
         }
 
         /// <summary>

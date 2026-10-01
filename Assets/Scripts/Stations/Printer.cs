@@ -5,6 +5,7 @@ using FishNet.Managing.Timing;
 using FishNet.Object;
 using FishNet.Object.Synchronizing;
 using Overworked.Containers;
+using Overworked.Documents;
 using Overworked.Interaction;
 using UnityEngine;
 
@@ -26,18 +27,26 @@ namespace Overworked.Stations
     /// length in front of the player rather than at their feet.
     ///
     /// Paper and ink are a public pool and belong to nobody. Whoever carried a sheet over, the
-    /// next sheet made uses it, so there is no queue to keep in order and nobody to rotate. The
-    /// faction rotation this machine will need belongs one level up, to the documents that come
-    /// out of it, and it arrives with the file queue: the algorithm written for it is in
-    /// PrinterQueue's git history, waiting for that, and is deliberately not kept here as dead
-    /// code in the meantime. Until the data layer exists, one player is enough to run it.
+    /// next job uses it, so there is no material queue to keep in order and nobody to rotate.
+    /// What the machine does queue is documents: the computer puts one at the back, the machine
+    /// takes one off the front, first in first out.
+    ///
+    /// That queue is deliberately not rationed between players, and it is worth saying why. An
+    /// earlier design rotated the *materials* by owner so that stuffing your own paper in could
+    /// not starve anyone. Its premise was wrong — materials are shared and carry no owner to
+    /// rotate — and its replacement rations nothing at all. A player who fills the queue does
+    /// block the machine until their own jobs are done, which is a way of taking the machine
+    /// rather than a way of breaking it: it drains by itself, and it costs them exactly what it
+    /// costs everyone else. Accepted for now, and deliberately not overlooked. Do not bring the
+    /// old rotation back; it is in this file's history if you want to read why it went.
     ///
     /// Ink is spent by the sheet rather than consumed as an item. A cartridge is a count living
     /// in the ink slot until it runs dry, and it is the slot being full that stops a second one
     /// going in — "a cartridge cannot be swapped before it is used up" needs no rule of its own.
     ///
-    /// Making a sheet is not replicated. The progress is a server-side timer, and the only
-    /// state other peers hold is the output container, which is a SyncList like any other.
+    /// Making a sheet is not replicated. The progress is a server-side timer; what other peers
+    /// hold is the announcement of what is being printed — which pile slot, which document — and
+    /// the output container itself, which is a SyncList like any other.
     /// </remarks>
     [DisallowMultipleComponent]
     public class Printer : StationBase
@@ -55,6 +64,16 @@ namespace Overworked.Stations
         /// Cartridges the ink slot is built to hold.
         /// </summary>
         private const int InkCapacity = 1;
+
+        /// <summary>
+        /// Roughly how many documents the job queue is expected to hold.
+        /// </summary>
+        /// <remarks>
+        /// A suggestion rather than a rule, unlike the paper and ink sizes: a queue of three or
+        /// of eight is a judgement about pacing, not a number the machine or the animation is
+        /// built around. It is only used to say so when the queue is unbounded.
+        /// </remarks>
+        private const int SuggestedQueueCapacity = 5;
 
         /// <summary>
         /// Sheets the pile holds.
@@ -102,6 +121,28 @@ namespace Overworked.Stations
         [SerializeField]
         private ContainerBase _output;
 
+        /// <summary>
+        /// The job queue: documents waiting to be printed, oldest at the front.
+        /// </summary>
+        /// <remarks>
+        /// A plain container holding Data entries, not a queue type of its own. A queue is a
+        /// container read from one end, and the computer, the console and this machine all
+        /// already speak ContainerBase — inventing a fourth kind of list would mean a fourth
+        /// serialisation path to get right and a fourth place for the entry format to drift.
+        ///
+        /// Consumed from the front, so it is first in, first out. The order is the only fairness
+        /// there is, and it is enough: nothing here needs to know who asked for a document,
+        /// because the document itself does not carry a player either. Who ordered it becomes a
+        /// question worth asking when requests exist, and the answer will live on the request.
+        ///
+        /// A capacity of about four to six is what this is built around. It is a small number on
+        /// purpose: the queue is a buffer between two machines, not a warehouse, and a long one
+        /// would let one player park a great deal of work in a machine they are not standing at.
+        /// </remarks>
+        [Tooltip("The job queue: documents waiting to be printed. Capacity 4 to 6 is what this is built around.")]
+        [SerializeField]
+        private ContainerBase _queue;
+
         [Header("Recipe")]
 
         /// <summary>
@@ -117,13 +158,6 @@ namespace Overworked.Stations
         [Tooltip("Payload index that counts as ink.")]
         [SerializeField]
         private int _inkPayloadIndex = 1;
-
-        /// <summary>
-        /// Payload index of a printed sheet.
-        /// </summary>
-        [Tooltip("Payload index of a printed sheet, as drawn on the machine and handed to the player.")]
-        [SerializeField]
-        private int _outputPayloadIndex = 2;
 
         /// <summary>
         /// Seconds of work per sheet.
@@ -209,13 +243,23 @@ namespace Overworked.Stations
         private readonly SyncVar<int> _printingSlot = new(0);
 
         /// <summary>
-        /// Payload index of the sheet being printed, or -1. Replicated.
+        /// Id of the document being printed, or -1. Replicated.
         /// </summary>
         /// <remarks>
-        /// What the machine shows coming out of itself, before the document has landed in the
-        /// pile and can be read from there.
+        /// The id rather than the payload, because the payload cannot tell Excel 1 from Excel 2:
+        /// they are the same template with a different number drawn on it, and the number is the
+        /// whole of what the machine is showing. A peer resolves this through
+        /// <see cref="Documents.DocumentStore"/> and gets the appearance, the number and the
+        /// team together, from the one place that holds them.
+        ///
+        /// Never reset, and never written on its own. What means "nothing is being printed" is
+        /// <see cref="_printingSlot"/> being zero, and a reader gates on that before it looks
+        /// this up, so an id left over from the last job is never read as a current one. Clearing
+        /// it as well would be a write of a value nothing needs, and the pair is only
+        /// trustworthy because it is written together — two fields written separately are two
+        /// fields that can be observed out of step.
         /// </remarks>
-        private readonly SyncVar<int> _printingPayload = new(-1);
+        private readonly SyncVar<int> _printingDocument = new(-1);
 
         /// <summary>
         /// Sheets the cartridge in the ink slot still has in it. Replicated.
@@ -256,9 +300,10 @@ namespace Overworked.Stations
         public int PrintingSlot => _printingSlot.Value;
 
         /// <summary>
-        /// Payload index of the sheet being printed, or -1 when nothing is.
+        /// Id of the document being printed, or -1 when nothing is. Resolve it through
+        /// <see cref="Documents.DocumentStore"/> for anything beyond "is a job running".
         /// </summary>
-        public int PrintingPayload => _printingPayload.Value;
+        public int PrintingDocument => _printingDocument.Value;
 
         /// <summary>
         /// Sheets the cartridge in the ink slot still has in it; zero when there is no cartridge.
@@ -274,6 +319,29 @@ namespace Overworked.Stations
         /// pointing at different containers.
         /// </remarks>
         public ContainerBase Output => _output;
+
+        /// <summary>
+        /// The job queue: documents waiting to be printed, oldest at the front.
+        /// </summary>
+        /// <remarks>
+        /// Exposed for the computer, which puts a document in it from across the room. Handing out
+        /// the machine's own container rather than letting the caller keep a second reference is
+        /// the same arrangement as <see cref="Output"/>, and it is what keeps the capacity check
+        /// the container already does from being written a second time at the call site.
+        ///
+        /// Nothing else about a request goes through here: whether the document exists, whether the
+        /// player is still standing at the computer and whether there is room are all settled
+        /// before anything is added.
+        ///
+        /// What goes in is a <c>ContainerEntry.ForData</c> and nothing else, and that belongs on
+        /// the open surface rather than only in the implementation, because three separate callers
+        /// can now reach this container and none of them reads the machine's internals. Anything
+        /// else is dropped with a complaint when it reaches the front — a queue holding something
+        /// the machine cannot print is a machine stalled for the rest of the round with nothing on
+        /// screen to say why. The check lives in the machine rather than here, since a container
+        /// cannot refuse what it does not recognise.
+        /// </remarks>
+        public ContainerBase Queue => _queue;
 
         /// <summary>
         /// Server: turns the machine on or off.
@@ -323,7 +391,7 @@ namespace Overworked.Stations
         /// </remarks>
         private void ValidateConfiguration()
         {
-            if (_paper == null || _ink == null || _output == null)
+            if (_paper == null || _ink == null || _output == null || _queue == null)
             {
                 Debug.LogError(
                     $"{nameof(Printer)} on {gameObject.name} is missing one of its containers and will do nothing.",
@@ -331,10 +399,22 @@ namespace Overworked.Stations
                 return;
             }
 
-            if (_paper == _ink || _paper == _output || _ink == _output)
+            if (_paper == _ink || _paper == _output || _paper == _queue
+                || _ink == _output || _ink == _queue || _output == _queue)
             {
                 Debug.LogError(
                     $"{nameof(Printer)} on {gameObject.name} has the same container wired to more than one slot.",
+                    this);
+            }
+
+            if (_queue.IsUnlimited)
+            {
+                /* The queue is the one container here that is meant to fill up. Its capacity is
+                 * the only bound on how much work one player can park in a machine they are not
+                 * standing at, and an unbounded queue turns "the machine is busy for a while"
+                 * into "the machine is gone for the round". */
+                Debug.LogWarning(
+                    $"{nameof(Printer)} on {gameObject.name} has an unlimited job queue; it is built around a capacity of about {SuggestedQueueCapacity}.",
                     this);
             }
 
@@ -523,50 +603,104 @@ namespace Overworked.Stations
         private bool IsOutputBlocked() => _output == null || _output.IsFull;
 
         /// <summary>
-        /// Server: takes one sheet of paper and one sheet's worth of ink, and starts work.
+        /// Server: takes a document, a sheet of paper and a sheet's worth of ink, and starts work.
         /// </summary>
         /// <remarks>
-        /// Both are checked before either is taken. A job that spent the paper and then found
-        /// the cartridge empty would burn an item for nothing, which is the kind of loss a
-        /// player cannot see coming.
+        /// All three are checked before any of them is spent. The order they are spent in matters
+        /// more than it looks: the document is the only one of the three that cannot be replaced
+        /// by walking to the paper box, so it is read without being taken, then the paper is
+        /// taken, and only then is the document removed. Nothing between those steps can fail on
+        /// a server — the checks above hold until this method returns — but if something ever
+        /// does, this order loses a sheet of paper rather than a document.
         /// </remarks>
         private void TryBeginCraft()
         {
-            if (_paper == null || _ink == null || _output == null)
+            if (_paper == null || _ink == null || _output == null || _queue == null)
                 return;
 
-            if (_paper.Count == 0 || _printsRemaining.Value <= 0 || IsOutputBlocked())
+            if (_paper.Count == 0 || _printsRemaining.Value <= 0 || _queue.Count == 0 || IsOutputBlocked())
+                return;
+
+            if (!TryReadJob(out int documentId))
                 return;
 
             if (!_paper.ServerTryRemoveFirst())
                 return;
 
+            if (!_queue.ServerTryRemoveFirst())
+                return;
+
             /* Announced before the work starts rather than when it lands, because the animation
              * begins now and has to know which pile position and which document it is showing.
-             * Both are then left alone for the rest of the job. */
+             * Both are written together, once, and then left alone for the rest of the job. */
             _printingSlot.Value = _output.Count + 1;
-            _printingPayload.Value = _outputPayloadIndex;
+            _printingDocument.Value = documentId;
 
             _crafting = true;
             _craftSeconds = 0f;
         }
 
         /// <summary>
+        /// Server: reads the document at the front of the queue without taking it.
+        /// </summary>
+        /// <remarks>
+        /// The queue is a plain container, so nothing stops a caller from putting something in it
+        /// that is not a document — an entity entry, or an id the store has never heard of.
+        /// Neither can happen from the computer or the console, and both would leave the machine
+        /// stalled behind a job it can never start, silently and for the rest of the round. That
+        /// is a bad enough failure to be worth the few lines it takes to turn it into a skip: the
+        /// entry is dropped with a complaint and the next one is tried on the following frame.
+        ///
+        /// Reads rather than takes, so that a queue with nothing usable in it costs nothing. The
+        /// caller spends the paper first and takes the document only once it is certain.
+        /// </remarks>
+        /// <returns>False when there is nothing at the front that can be printed.</returns>
+        private bool TryReadJob(out int documentId)
+        {
+            documentId = -1;
+
+            if (_queue == null || !_queue.TryGetEntry(0, out ContainerEntry entry))
+                return false;
+
+            /* Nothing can be read before the store is up, and waiting for it costs a frame while
+             * treating it as a bad entry would throw the document away. The two are deliberately
+             * not folded together. */
+            DocumentStore store = DocumentStore.Instance;
+            if (store == null)
+                return false;
+
+            ContainerEntryKind kind = (ContainerEntryKind)entry.Kind;
+            if (kind == ContainerEntryKind.Data && store.TryGet(entry.DataId, out DocumentRecord _))
+            {
+                documentId = entry.DataId;
+                return true;
+            }
+
+            Debug.LogWarning(
+                $"{nameof(Printer)} on {gameObject.name} dropped a queue entry that is not a printable document (kind {kind}, id {entry.DataId}).",
+                this);
+
+            _queue.ServerTryRemoveFirst();
+            return false;
+        }
+
+        /// <summary>
         /// Server: adds the finished sheet to the output and charges it to the cartridge.
         /// </summary>
         /// <remarks>
-        /// Data is not built yet, so a job is paper and ink and nothing else. When documents
-        /// exist, this is where the third requirement goes, and where the file queue and the
-        /// faction rotation plug in: the sheet produced here will belong to whoever ordered the
-        /// document rather than to whoever carried the paper over. The rotation algorithm that
-        /// used to sit in PrinterQueue is in this file's git history, waiting for that.
+        /// The sheet goes in as a Data entry pointing at the document, never as an entity
+        /// carrying the document's number. A document has one representation and this is it;
+        /// an entity with a number bolted on would be a second spelling of the same thing, and
+        /// the next module to read it would have to guess which spelling was authoritative.
+        /// What the entity is — which payload, which number, which team — is the store's to
+        /// answer, and the sheet only has to say which document it is.
         /// </remarks>
         private void FinishCraft()
         {
             /* If the output filled up while this sheet was being made, the work is kept and the
              * sheet stays in the machine until there is room. Dropping it would destroy paper
              * and ink the player already paid for. */
-            if (!_output.ServerTryAdd(ContainerEntry.ForEntity(_outputPayloadIndex)))
+            if (!_output.ServerTryAdd(ContainerEntry.ForData(_printingDocument.Value)))
                 return;
 
             _crafting = false;
@@ -623,8 +757,22 @@ namespace Overworked.Stations
              * player can see it instead of shuffling it down under their hand. */
             if (!_output.TryGetEntry(_output.Count - 1, out ContainerEntry entry))
                 return;
-            if (entry.Kind != (byte)ContainerEntryKind.Entity)
+            if (entry.Kind != (byte)ContainerEntryKind.Data)
                 return;
+
+            /* Resolved before anything is spawned. The sheet is handed over wearing the
+             * document's appearance, number and team, all of which come from the store, and a
+             * sheet that cannot say which document it is would lose its number the moment it
+             * went into a folder. Refusing leaves it in the machine, where it can be taken once
+             * the store is reachable. */
+            DocumentStore store = DocumentStore.Instance;
+            if (store == null || !store.TryGet(entry.DataId, out DocumentRecord document))
+            {
+                Debug.LogWarning(
+                    $"{nameof(Printer)} on {gameObject.name} could not resolve document {entry.DataId}; the sheet was left in the machine.",
+                    this);
+                return;
+            }
 
             /* Checked before anything is removed or spawned, so a scene with no spawner reports
              * the problem instead of quietly deleting a sheet. */
@@ -640,10 +788,13 @@ namespace Overworked.Stations
             /* Spawn before removing, so the failure above and any other one costs the machine a
              * sheet rather than the player one. */
             NetworkObject nob = GrabbableSpawner.SpawnGrabbable(
-                entry.PayloadIndex,
+                document.PayloadIndex,
                 player.HandPosition,
                 Quaternion.identity,
-                conn);
+                conn,
+                document.Number,
+                document.Team,
+                entry.DataId);
 
             if (nob == null)
                 return;

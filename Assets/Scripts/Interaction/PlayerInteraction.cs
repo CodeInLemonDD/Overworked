@@ -3,7 +3,10 @@ using FishNet.Connection;
 using FishNet.Object;
 using FishNet.Transporting;
 using FishNet.Utility.Template;
+using Overworked.Containers;
+using Overworked.Documents;
 using Overworked.Stations;
+using Overworked.UI;
 using UnityEngine;
 using UnityEngine.InputSystem;
 
@@ -205,6 +208,18 @@ namespace Overworked.Interaction
         [Tooltip("Presses at or over this duration are sent to a station as a long press.")]
         [SerializeField]
         private float _stationLongPressSeconds = 0.3f;
+
+        /// <summary>
+        /// The team every document is stamped with this round.
+        /// </summary>
+        /// <remarks>
+        /// Hard-coded, and deliberately not a serialized field: there is no team assignment yet, so
+        /// anything configurable here would be a value with nothing to set it. It is a named
+        /// constant rather than a bare 0 so that the round it stops being true is greppable — every
+        /// player is on team A until the 2v2 split arrives, and the document's team is the only
+        /// thing in this file that cares.
+        /// </remarks>
+        private const int TeamThisRound = 0;
 
         /// <summary>
         /// Per-object copy of the assigned action asset. See PlayerMovementPrediction for
@@ -1089,6 +1104,131 @@ namespace Overworked.Interaction
                 return;
 
             grabbable.ServerSetFree();
+        }
+
+        /// <summary>
+        /// Server: tells the asking client to open a computer's panel.
+        /// </summary>
+        /// <remarks>
+        /// Sent from here rather than from the station for the same reason every other RPC is: this
+        /// object belongs to its own client, and the call has to be answered on exactly that
+        /// client. A TargetRpc is not bound by ownership the way a ServerRpc is, but keeping the
+        /// project's RPCs in one place is worth more than the one line it would save, and this keeps
+        /// "which panel belongs to whom" answerable by reading a single file.
+        /// </remarks>
+        [Server]
+        public void ServerOpenComputerPanel(Computer computer)
+        {
+            if (computer == null || !computer.IsSpawned)
+                return;
+            if (!Owner.IsValid)
+                return;
+
+            RpcOpenComputerPanel(Owner, computer.NetworkObject);
+        }
+
+        /// <summary>
+        /// Client: opens the panel belonging to a computer.
+        /// </summary>
+        /// <remarks>
+        /// The station travels as a NetworkObject rather than as a behaviour: a NetworkObject is
+        /// what the project already passes for "this particular thing in the world", and it is the
+        /// form FishNet's own code in this file already uses. Which component on it is wanted is
+        /// resolved on arrival.
+        /// </remarks>
+        [TargetRpc]
+        private void RpcOpenComputerPanel(NetworkConnection conn, NetworkObject computerObject)
+        {
+            if (computerObject == null)
+                return;
+
+            Computer computer = computerObject.GetComponentInChildren<Computer>();
+            if (computer == null)
+                return;
+
+            ComputerPanel panel = computer.Panel;
+            if (panel == null)
+                return;
+
+            /* `this` is the component the message arrived on, so the panel is handed the player it
+             * belongs to rather than searching the scene for one — which would be a guess, because
+             * every client holds a copy of every player. */
+            panel.Show(this, computer);
+        }
+
+        /// <summary>
+        /// Client: asks the server to create the chosen document and queue it on a printer.
+        /// </summary>
+        /// <remarks>
+        /// A plain wrapper rather than the RPC itself, because the caller is the panel and an RPC
+        /// is private to the behaviour it is declared on. Same shape as the pair above.
+        /// </remarks>
+        public void RequestDocument(NetworkObject computer, NetworkObject printer, int specIndex) =>
+            CmdRequestDocument(computer, printer, specIndex);
+
+        /// <summary>
+        /// Server: creates the document and puts it in the machine's job queue.
+        /// </summary>
+        /// <remarks>
+        /// Range is measured back to the computer the player is standing at, never to the printer
+        /// they picked. Reaching a machine across the room is the entire purpose of the computer —
+        /// the walk from it to the printer is the cost the game charges for a document — so
+        /// checking against the printer would forbid the only thing this station does.
+        ///
+        /// Everything past that check is silent on failure. A full queue, a printer that has gone
+        /// away and a spec index that does not exist are all normal, and a station that announced
+        /// them would be reporting its own bookkeeping rather than anything the player did wrong.
+        /// </remarks>
+        [ServerRpc]
+        private void CmdRequestDocument(
+            NetworkObject computerObject,
+            NetworkObject printerObject,
+            int specIndex,
+            NetworkConnection caller = null)
+        {
+            if (computerObject == null || printerObject == null || caller == null || !caller.IsActive)
+                return;
+            if (!computerObject.IsSpawned || !printerObject.IsSpawned)
+                return;
+
+            Computer computer = computerObject.GetComponentInChildren<Computer>();
+            if (computer == null)
+                return;
+
+            Printer printer = printerObject.GetComponentInChildren<Printer>();
+            if (printer == null)
+                return;
+
+            DocumentCatalogue catalogue = computer.Catalogue;
+            if (catalogue == null || !catalogue.TryGet(specIndex, out DocumentCatalogue.Spec spec))
+                return;
+
+            /* Range against the server's own copy of the player's transform, never against
+             * anything the client reported. */
+            Vector3 origin = transform.position;
+            Vector3 to = computer.transform.position - origin;
+            to.y = 0f;
+
+            float reach = computer.InteractReach + _serverRangeTolerance;
+            if (to.sqrMagnitude > reach * reach)
+                return;
+
+            /* Room is checked before anything is made. A document created for a queue that cannot
+             * take it would exist in the store, hold a number nothing else can ever use, and be
+             * reachable by nothing — the number has no ceiling, so burning one is a permanent
+             * change made for a request that was going to be refused anyway. */
+            ContainerBase queue = printer.Queue;
+            if (queue == null || queue.IsFull)
+                return;
+
+            DocumentStore store = DocumentStore.Instance;
+            if (store == null)
+                return;
+
+            int id = store.ServerCreate(spec.PayloadIndex, TeamThisRound, spec.Source);
+
+            /* Silent when it fails, like every other full container in the project. */
+            queue.ServerTryAdd(ContainerEntry.ForData(id));
         }
 
     }

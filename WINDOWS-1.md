@@ -145,3 +145,127 @@
   但它是**位置判定**,不是「玩家想放进机器」的意图判定 —— 站在机器旁往下丢纸
   和「把纸丢在机器脚边」在它眼里是一样的。如果测试下来觉得「不该吸的也吸了」,
   换方向应该是**收紧盒子**而不是加规则。
+
+---
+---
+
+# 第二轮 · 文档数据层
+
+**状态**:代码完成,离线编译 **0 error / 3 warning**(3 条全是 CS0114 基线)。
+**运行时未验证** —— MPPM 从没跑过,那是你的活。
+**文件**:`Stations/Printer.cs`、`Stations/PrinterDisplay.cs`。场景和 prefab 一个字没碰。
+
+## 做了什么
+
+1. **第四个容器 `_queue`** —— 任务队列,装 `Data` 条目。接线检查加进了 `ValidateConfiguration`,
+   和另外三个一起判「接上了没 / 有没有接重」。
+2. **`TryBeginCraft` 凑齐三个条件** —— 纸、墨、队列非空。三个都在**动手之前**判。
+3. **`_printingDocument`(SyncVar,DataId)** —— 打印中的是哪一份,复制出去。
+4. **`FinishCraft` 产出 `Data` 条目** —— `ContainerEntry.ForData(id)`,不再产出 Entity。
+5. **取走时编号跟着走** —— 查记录 → `SpawnGrabbable(..., record.Number, record.Team)` → `ServerSetDataId`。
+6. **`PrinterDisplay` 改认身份** —— 槽位缓存从 `PayloadIndex` 换成 `DataId`,并在副本上
+   `PayloadLabel.SetVariant(number, team)`。
+7. **显示层全部经 `DocumentStore` 解析** —— 条目只说是哪一份,外观 / 编号 / 队伍都从库里查。
+
+## 我自己决定的事(都不在提示词里)
+
+**① `_printingPayload` 删掉了,不是并存。**
+提示词说「加一个 `_printingDocument`」。我把它**换掉**了,因为文档的 payload 索引是**从身份推出来的**,
+两个 SyncVar 说同一件事就违反了本轮文档自己写的那条「一个东西只能有一种表示」——
+而且两份复制状态迟早会不一致。`_printingPayload` 的读者只有一个(`PrinterDisplay`),已一并改掉。
+
+**② `_outputPayloadIndex` 删掉了。**
+产出的外观现在由文档记录决定,这个字段**再没有读者**。留着它的坏处是具体的:Inspector 上有一个
+填了也不起作用的字段,下一个人会去填它然后奇怪为什么没用。**prefab 上这个字段会消失,这是预期的。**
+
+**③ `ServerSetDataId` 是在 `Spawn()` 之后调的 —— 这是我唯一一处明知故犯。**
+`SpawnGrabbable` 内部就 `Spawn()` 了,然后在末尾 `return nob`,所以「拿到 nob 之后、Spawn 之前」
+那个窗口**在现有签名下不存在**。两个选择:自己拿 `GetPooledInstantiated` 复刻一遍造物体的流程
+(违反「`SpawnGrabbable` 是唯一入口」),或者之后再补一句。
+我选了后者,理由是 `NetworkGrabbable.ServerSetDataId` 自己的注释写着:**没有任何东西订阅它的变化,
+没有需要追上的东西**。代价是一个来回里「外观和编号对了、身份还没到」。
+
+**正解是给 `SpawnGrabbable` 加一个 `dataId = -1` 参数**,在它内部和 payload / variant 一起设。
+那是 `GrabbableSpawner.cs`,不是我的文件,所以我没动 —— 注释里写明了位置。**要不要我请核心窗口加?**
+
+**④ 队列里出现「不是文档」的东西时,丢掉并报警,而不是卡住。**
+队列是普通容器,谁都能往里放。真放了 Entity、或者一个库里没有的 id,机器会**永久卡在一条打不动的活上**,
+安静地、卡一整局。八行代码把它变成一次跳过。
+
+**⑤ 三样东西的消耗顺序:先读文档(不取)→ 取纸 → 才取文档。**
+文档是三样里唯一「不能用跑一趟补回来」的。服务端上中间那两步不会失败,但如果哪天失败了,
+这个顺序丢的是一张纸,不是一份文件。
+
+**⑥ 容器检查放在 `ValidateConfiguration`(OnStartServer),不是 `OnValidate`。**
+提示词以为这类检查在 `OnValidate` 里,其实一直在 `ValidateConfiguration`。我跟了现有的。
+没放进 `OnValidate` 是有原因的:**prefab 编辑到一半时容器引用本来就是空的**,那时报 error 只会刷屏。
+
+**⑦ 队列无限容量会警告。** 容量是队列唯一的天然上界,无限容量把「机器忙一会儿」变成「机器这局没了」。
+
+## 我认为还可能不对的地方
+
+- **`_printingDocument` 和 `_printingSlot` 都【不重置】**,靠 `PrintingSlot == 0` 表示空闲。
+  这是刻意的(见 `FinishCraft` 里那段长注释:同一帧写两个值会在一个包里合并发出,客户端只看得到后一个),
+  但**读代码的人会觉得少了半句**,所以我把它写进字段注释了。别去"补"那个 -1。
+- **队列满了就是抢机器**,这是本轮**明确接受**的。但请注意容量:5 是「有界的排队」,
+  50 就是「这台机器这局归我了」。我在启动时对**无限容量**报警告,对具体数字不报警 ——
+  数字是节奏判断,不该由机器来规定。
+- **W1 现在没法和 W2/W3 分开测。** 队列里没有别的途径能进文档 —— 要么等 W2 的电脑面板,
+  要么等 W3 的 `document` + `queue` 命令。**建议优先 W3**,它就是为了这个存在的。
+- **`PayloadLabel` 的 `_texts` 必须填,而且模板上的编号文字要留空。**
+  留空时没接线 = 白纸一张(看得出没通);留 "1" 时没接线 = **看起来像编号生效了**,那是模板默认值。
+  这是上一轮「文件上的字没显示」那条的同一类陷阱。
+
+## 接线清单
+
+**`Printer.prefab`**(场景和 prefab 我没有权限碰,请你操作):
+
+| 位置 | 组件 | 填什么 |
+|---|---|---|
+| 新建子物件(比如 `队列`) | `ContainerBase` | 容量 **5**(4~6 随意,**别设 0 / 负数**,那是无限) |
+| 根 `Printer` | `_queue` | 拖上面那个 `ContainerBase` |
+| | ~~`_outputPayloadIndex`~~ | **这个字段已经删了**,Inspector 里不会再出现 |
+| | `_secondsPerOutput` | 确认是 **2**(和 Printing 片段的 2.000 秒对齐;`WIRING.md` 里还写着 3,是旧的) |
+| 三个槽位 + 队列 | 都**不挂** `ContainerView` | 队列和纸墨一样只关心数量,该用 W4 的 `ContainerGauge` |
+
+启动时机器会自己检查:四个容器都接上了没、有没有接重、队列是不是无限容量。
+
+**`PrinterDisplay`**(挂在打印机根上):
+
+| 字段 | 填 |
+|---|---|
+| `_printer` | 同物件上的 `Printer` |
+| `_catalogue` | `PayloadCatalogue` 资产 |
+| `_animator` | 留空会自动找(机器根上就是) |
+| `_slots` | **6 个**,从下到上 = `打印好的纸1..6` |
+| `_printingSheet` | 根上的「纸」 |
+
+**payload prefab**(每个要显示编号的):
+
+- 挂 `PayloadLabel`
+- `_texts` 填**两个** —— 正面和背面(`Number` 和 `Number Back`)
+- `_teamColours` 按队伍索引填颜色
+- **模板上的文字留空**,不要留 "1"
+
+**场景**:需要一个挂 `DocumentStore` 的 NetworkObject(P0 的接线项,保持激活、不加 NetworkTransform)。
+没有它:堆上会保留美术摆的占位纸、打印头什么都不显示 —— 是**设计好的降级**,不是崩溃。
+
+## 追加:跨窗口的接口缺口(W2 补的,我确认过)
+
+W2 和 W3 都撞上了同一个缺口:**`Printer` 有 `Output` 却没有公开的 `Queue`。** 我漏了 ——
+`_queue` 是我加的,但公开面只放了 `Output`。
+
+**W2 先停下来问了用户,用户选「加属性」,然后才动的手。** 所以:
+- `Printer.cs` 里那个 `Queue` 属性是 **W2 写的,有授权**,不是擅自改
+- 我逐行核对了两个文件的 diff:**除此之外没有任何别的内容被动过**(`PrinterDisplay.cs` 100% 是我写的)
+- W3 提的第 2 条(契约要写在公开面上,不能只活在实现里)是对的,已照办:属性注释现在写明
+  「只放 `ContainerEntry.ForData`,别的一律在队头被丢掉并报警」
+
+**另外:整棵树当时是红的,原因有两个,现在都清了。**
+
+1. `Assembly-CSharp.csproj` 少了 `Computer.cs` / `ComputerPanel.cs` 两行 —— 假错误。
+   这个文件被 `.gitignore` 忽略,是 Unity 聚焦时重新生成的本地产物。**我把它补了**,
+   三个窗口的离线编译都受益,也不会进提交。
+2. `Printer.Queue` 不存在 —— W2 已经加了。
+
+补完之后全量编译:**0 error / 3 warning**(全是 CS0114 基线)。

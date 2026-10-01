@@ -133,3 +133,81 @@ dotnet build Assembly-CSharp.csproj -p:BaseIntermediateOutputPath="$TEMP/obj/" -
 ## 七、一句话
 
 这个 bug 的根因是 `SnapSurface` 用「命中碰撞体的父级」来认桌面,而「父级」这个关系分不清**桌面**和**站在桌面上的东西** —— 两者在层级上完全一样。标记方案是在这个前提下的正解(确定性、不加足迹数据、不动多格桌子和堆叠桌子的既有设计),**但它把正确性的一部分交给了布置的人** —— 所以 `OnValidate` 现在把挂错层当场报出来,而不是等试玩时看到 bug 复现。这一点值得写进 CONSTRAINTS。
+---
+
+# 第二轮 · 控制台
+
+**状态**:代码完成,离线编译 **0 error / 3 warning**(3 条全是 CS0114 基线)。
+**运行时未验证** —— MPPM 没跑过,那是你的活。
+**文件**:`Assets/Scripts/Dev/DevConsole.cs`(+358 行)。场景和 prefab 一个字没碰,**编辑器里不需要你做任何事**。
+
+## 四条命令
+
+| 命令 | 作用 |
+|---|---|
+| `document <spec> [团队]` | 从 `DocumentCatalogue` 造一份文档。打印 id / 种类 / 编号 / 队伍 / 来源 |
+| `docs` | 列出已造出来的所有文档:`#id payload N number N team N Filing/Internet` |
+| `queue <打印机> <文档>` | 把那份文档塞进某台机器的任务队列 |
+| `printers` | 列打印机:`#0 Printer cell (3, 1) queue 2/5 printing document 4` |
+
+`document` 不带参数时先把规格表列出来(索引 / 名字 / payload / 来源);Tab 补全的候选从
+`DocumentCatalogue.Count` 现取,`queue` 的第一个参数补打印机序号、第二个补文档 id。
+
+**一条完整链路**(W1 不用等 W2 的电脑面板):
+
+```
+document 1      → created document 0: spec 1 'Excel', payload 2, number 1, team 0, source Filing.
+printers        → #0  Printer  cell (3, 1)  queue 0/5
+queue 0 0       → queued document 0 (#1) on 'Printer'; queue 1/5.
+```
+
+之后机器在纸和墨都够的时候自己开工,产出堆到机器上,拿在手里编号还在 —— 那是 W1 那部分。
+(名字印的是你在 asset 里填的 `DisplayName`,上面这个只是样子。)
+
+## 我决定的事(都不在提示词里)
+
+**① 打印机序号按名字排序,不按 `FindObjectsByType` 给的顺序。**
+`queue` 用序号指机器,`printers` 把序号印给人看,两个命令隔着人的眼睛。`FindObjectsByType` 的顺序
+没有任何承诺 —— 这次是个样、下次加载可能是另一个样;按 `string.CompareOrdinal` 排则**两端一致、每次一致**。
+名字重复是布置错误,不是这个命令该处理的。
+
+**② `docs` 和 `printers` 不要求服务端。** 它们只读,不造不删 —— 类注释那句「Server only」管的是
+造和删的命令,`pos` 也是这个先例。这样它们正好能在**客户端**上敲,用来验「复制到没到」——
+那是有价值的问法,而服务端专用的命令给不了。
+
+**③ `document` 的队伍默认 0,不是 -1。** 本轮所有玩家都在队伍 A(W2 那轮同样硬编码),
+默认给 0 才是「和现在一致」;要不上色就显式写 `-1`。
+
+**④ `docs` 的「种类」列是 payload 索引,不是 DisplayName。** 记录里**故意不存**它来自哪个 spec
+(多个 spec 可以共用一个 payload),从记录反推名字只能猜。宁可不猜:决定外观的就是 payload 索引,
+它和将来 NPC 需求要核对的那个「种类」是同一个东西。
+
+**⑤ 队列满了会说出来,不像电脑那样静默。** 游戏里满容器一律静默(W2 也照做了),但控制台前面
+站着一个人刚敲完一行字,他该拿到答复 —— 而且报的是 `2/5` 这种具体数字,不是一句「失败了」。
+
+**⑥ `document` 只造记录,不造物体。** 手上那张纸是工位发出来的 `NetworkGrabbable`;控制台要顶替的是
+**电脑**,所以它走到「库里多了一条」为止。要造带编号的物体,得先给 `SpawnGrabbable` 接上 `dataId`
+(W1 交接里提过),那是 `GrabbableSpawner.cs`,不是我的文件。
+
+## 我认为可能不对的
+
+- **`document` 造出来的记录没有物体、不进任何容器,`clear entities` 也清不掉它。** `DocumentStore`
+  这一局只增不减(P0 定的),所以敲几次就留下几条谁也用不到的记录。测试时无害(编号本来就会跳),
+  但**别拿它当「造物体」的替代品**。
+- **`Catalogue` 的编辑器兜底是 `AssetDatabase.FindAssets`,现在只有一个 `DocumentCatalogue`。**
+  出现第二个时它会拿找到的第一个,不报警。字段是正路,兜底只是让控制台不接线也能用。
+- **`printers` 每敲一次都 `FindObjectsByType` + 排序。** 几十台机器、人手敲命令的速度,不值得缓存;
+  真看到它卡,根因在这里。
+- **`queue` 会往队列里塞任意存在的 id**,包括已经被打掉、已经堆在别处的那些。控制台是开发工具,
+  不替使用者记「这份已经用过了」。
+
+## 曾经阻塞在这里(已解决)
+
+`Printer._queue` 是 private,公开面里只有 `Output`。W2 的 `PlayerInteraction.cs:1220` 和我的 `queue`
+都要摸它,所以**当时整棵树是红的,而且只有一个错误**。W1 补了 `public ContainerBase Queue => _queue;`,
+并把我建议的那条契约(只能塞 `ContainerEntry.ForData`)写进了属性的 XML 注释里。
+
+留一笔,因为这不是「W1 漏了一行」:**一个窗口加了「别的窗口要往里喂东西的容器」时,喂的口子属于它的交付范围。**
+W1 的交接里写着「队列里没有别的途径能进文档 …… 建议优先 W3」—— 它知道机器不可测,
+但没意识到那等于接口还没写完。`WINDOWS-DATA.md` 的「已冻结接口」那张表可以加一行 `Printer.Queue`,
+下一轮就不会有人再问第二遍。

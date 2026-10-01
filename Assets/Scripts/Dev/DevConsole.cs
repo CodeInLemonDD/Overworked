@@ -6,6 +6,8 @@ using FishNet.Object;
 using Overworked.Stations;
 using Overworked.Interaction;
 using Overworked.Player;
+using Overworked.Documents;
+using Overworked.Containers;
 using UnityEngine;
 using UnityEngine.InputSystem;
 
@@ -74,6 +76,21 @@ namespace Overworked.Dev
         [SerializeField]
         private NetworkObject[] _furniture;
 
+        [Header("Documents")]
+
+        /// <summary>
+        /// The document specs the console can create, and what Tab completes to.
+        /// </summary>
+        /// <remarks>
+        /// Optional. Left empty, <see cref="Catalogue"/> finds the project's own asset in the
+        /// editor, so the console works the moment it is dropped into a scene and nothing has to
+        /// be wired by hand. The field is what points it at a different one, and it is the only
+        /// way this works in a build — see the remarks on that property.
+        /// </remarks>
+        [Tooltip("Document specs. Leave empty to use the project's DocumentCatalogue (editor only).")]
+        [SerializeField]
+        private DocumentCatalogue _catalogue;
+
         [Header("Display")]
 
         /// <summary>
@@ -136,7 +153,16 @@ namespace Overworked.Dev
         /// <summary>
         /// Every first word the console knows.
         /// </summary>
-        private static readonly string[] Verbs = { "spawn", "clear", "give", "tp", "pos", "help" };
+        private static readonly string[] Verbs =
+            { "spawn", "clear", "give", "tp", "pos", "document", "docs", "queue", "printers", "help" };
+
+#if UNITY_EDITOR
+        /// <summary>
+        /// What <see cref="Catalogue"/> found when the field was left empty. Cached because the
+        /// lookup walks the asset database, and this is read once per command.
+        /// </summary>
+        private DocumentCatalogue _foundCatalogue;
+#endif
 
         /// <summary>
         /// Frame the console was toggled on, so the backtick that opened it is not typed.
@@ -338,6 +364,22 @@ namespace Overworked.Dev
                     Position();
                     return;
 
+                case "document":
+                    CreateDocument(parts);
+                    return;
+
+                case "docs":
+                    ListDocuments();
+                    return;
+
+                case "queue":
+                    QueueDocument(parts);
+                    return;
+
+                case "printers":
+                    ListPrinters();
+                    return;
+
                 default:
                     Log($"unknown command '{verb}'. Try 'help'.");
                     return;
@@ -354,6 +396,10 @@ namespace Overworked.Dev
             Log("give <payload> [number] [team]           put one into the local player's hands");
             Log("tp <x> <y>                               move the local player to a cell");
             Log("pos                                      print the local player's cell");
+            Log("document <spec> [team]                   make a document from the spec list");
+            Log("docs                                     list the documents that exist");
+            Log("queue <printer> <document>               put a document in a machine's job queue");
+            Log("printers                                 list the printers and their queues");
             Log("help                                     this");
             Log("Coordinates are grid cells; objects land on the cell centre.");
         }
@@ -660,6 +706,258 @@ namespace Overworked.Dev
             Log($"local player at cell ({cell.x}, {cell.y}); world ({p.x:0.##}, {p.z:0.##}).");
         }
 
+        /// <summary>
+        /// <c>document &lt;spec&gt; [team]</c>
+        /// </summary>
+        /// <remarks>
+        /// Creates the record, not an object. A document that is lying around is a
+        /// NetworkGrabbable some station handed out; what this stands in for is the computer, so
+        /// that the machine can be tested before the computer exists. <c>queue</c> is what then
+        /// puts it in a printer.
+        ///
+        /// The spec index is the document catalogue's, for the same reason the payload index in
+        /// <c>spawn entity</c> is the payload catalogue's: the console and the game must not be
+        /// able to disagree about what a number means, and a list of its own here would be one
+        /// more place for it to drift.
+        /// </remarks>
+        private void CreateDocument(string[] parts)
+        {
+            if (!RequireServer())
+                return;
+
+            DocumentCatalogue catalogue = Catalogue;
+            if (catalogue == null)
+            {
+                Log("no document catalogue assigned or found.");
+                return;
+            }
+
+            if (parts.Length < 2)
+            {
+                Log("usage: document <spec> [team]");
+                LogSpecs(catalogue);
+                return;
+            }
+            if (!TryParse(parts[1], "spec", out int spec))
+                return;
+
+            /* Team A by default, which is where every player is until teams are assigned — the
+             * same stopgap the computer panel takes. -1 is "no colour" and can be asked for. */
+            int team = 0;
+            if (parts.Length > 2 && !TryParse(parts[2], "team", out team))
+                return;
+
+            if (!catalogue.TryGet(spec, out DocumentCatalogue.Spec entry))
+            {
+                Log($"no document spec {spec}.");
+                LogSpecs(catalogue);
+                return;
+            }
+
+            DocumentStore store = DocumentStore.Instance;
+            if (store == null)
+            {
+                Log("no DocumentStore in the scene.");
+                return;
+            }
+
+            int id = store.ServerCreate(entry.PayloadIndex, team, entry.Source);
+
+            /* Read back rather than predicting what it became: the number is the store's to give,
+             * and the printed id is the argument the next command wants. */
+            store.TryGet(id, out DocumentRecord record);
+
+            Log($"created document {id}: spec {spec} '{entry.DisplayName}', payload {record.PayloadIndex}, " +
+                $"number {record.Number}, team {record.Team}, source {(DocumentSource)record.Source}.");
+        }
+
+        /// <summary>
+        /// <c>docs</c>
+        /// </summary>
+        /// <remarks>
+        /// Reads the store rather than keeping a list of its own, which makes this the way a
+        /// client checks that it has been told about everything the server has — so it is not a
+        /// server command. It makes nothing and removes nothing.
+        ///
+        /// The kind column is the payload index, because that is what a document's kind is: its
+        /// appearance. A record deliberately does not remember which spec it was ordered from,
+        /// since several specs may share one payload.
+        /// </remarks>
+        private void ListDocuments()
+        {
+            DocumentStore store = DocumentStore.Instance;
+            if (store == null)
+            {
+                Log("no DocumentStore in the scene.");
+                return;
+            }
+            if (store.Count == 0)
+            {
+                Log("no documents yet. 'document <spec>' makes one.");
+                return;
+            }
+
+            for (int id = 0; id < store.Count; id++)
+            {
+                if (!store.TryGet(id, out DocumentRecord record))
+                    continue;
+
+                Log($"#{id}  payload {record.PayloadIndex}  number {record.Number}  " +
+                    $"team {record.Team}  {(DocumentSource)record.Source}");
+            }
+
+            Log($"{store.Count} document(s).");
+        }
+
+        /// <summary>
+        /// <c>queue &lt;printer&gt; &lt;document&gt;</c>
+        /// </summary>
+        /// <remarks>
+        /// Moves a document that already exists, rather than making one: <c>document</c> is what
+        /// creates records, and taking a spec index here as well would be a second way to make
+        /// the same thing — the thing this round spent its frozen interfaces avoiding.
+        ///
+        /// It says out loud when the queue is full, unlike the computer, which refuses in silence
+        /// like every other full container in the game. The difference is who is listening: the
+        /// console has someone standing at it who just typed a line and is owed an answer.
+        ///
+        /// Server only, because it changes what a machine will do next. Not because a client
+        /// could not be trusted with the read — <c>printers</c> is that read, and it is open to
+        /// anyone.
+        /// </remarks>
+        private void QueueDocument(string[] parts)
+        {
+            if (!RequireServer())
+                return;
+            if (parts.Length < 3)
+            {
+                Log("usage: queue <printer> <document>");
+                return;
+            }
+            if (!TryParse(parts[1], "printer", out int printer) || !TryParse(parts[2], "document", out int id))
+                return;
+
+            List<Printer> printers = FindPrinters();
+            if (printer < 0 || printer >= printers.Count)
+            {
+                Log($"no printer {printer}. 'printers' lists them.");
+                return;
+            }
+
+            DocumentStore store = DocumentStore.Instance;
+            if (store == null)
+            {
+                Log("no DocumentStore in the scene.");
+                return;
+            }
+            if (!store.TryGet(id, out DocumentRecord record))
+            {
+                Log($"no document {id}. 'docs' lists them.");
+                return;
+            }
+
+            Printer machine = printers[printer];
+            ContainerBase queue = machine.Queue;
+            if (queue == null)
+            {
+                Log($"'{machine.name}' has no job queue wired.");
+                return;
+            }
+
+            if (!queue.ServerTryAdd(ContainerEntry.ForData(id)))
+            {
+                Log($"'{machine.name}' refused it; its queue is full at {Describe(queue)}.");
+                return;
+            }
+
+            Log($"queued document {id} (#{record.Number}) on '{machine.name}'; queue {Describe(queue)}.");
+        }
+
+        /// <summary>
+        /// <c>printers</c>
+        /// </summary>
+        /// <remarks>
+        /// The numbering the <c>queue</c> command takes, and what each machine is holding. Like
+        /// <c>docs</c> this reads and changes nothing, so it is not a server command: a client
+        /// seeing a different queue length from the server is exactly the kind of thing worth
+        /// being able to ask about from the client.
+        /// </remarks>
+        private void ListPrinters()
+        {
+            List<Printer> printers = FindPrinters();
+            if (printers.Count == 0)
+            {
+                Log("no printers in the scene.");
+                return;
+            }
+
+            for (int i = 0; i < printers.Count; i++)
+            {
+                Printer machine = printers[i];
+                Vector3 position = machine.transform.position;
+                Vector2Int cell = WorldGrid.CellCoord(new Vector2(position.x, position.z));
+
+                ContainerBase queue = machine.Queue;
+                string fill = queue != null ? Describe(queue) : "no queue wired";
+                string printing = machine.PrintingDocument >= 0
+                    ? $"  printing document {machine.PrintingDocument}"
+                    : string.Empty;
+
+                Log($"#{i}  {machine.name}  cell ({cell.x}, {cell.y})  queue {fill}{printing}");
+            }
+        }
+
+        /// <summary>
+        /// Lists the specs and what they resolve to, for a usage line or an unknown spec.
+        /// </summary>
+        private void LogSpecs(DocumentCatalogue catalogue)
+        {
+            for (int i = 0; i < catalogue.Count; i++)
+            {
+                if (!catalogue.TryGet(i, out DocumentCatalogue.Spec spec))
+                    continue;
+
+                Log($"  {i}  {spec.DisplayName}  payload {spec.PayloadIndex}  {(DocumentSource)spec.Source}");
+            }
+        }
+
+        /// <summary>
+        /// The document catalogue to make documents from.
+        /// </summary>
+        /// <remarks>
+        /// The assignment when there is one, and otherwise the project's own asset. The fallback is
+        /// what keeps the console a drop-in tool: this is the one thing in the project that no
+        /// scene object holds a reference to yet — the computer prefab will, and until it exists
+        /// there is nothing to drag from.
+        ///
+        /// Editor only. A build has no AssetDatabase, and this console is not meant to be shipped
+        /// enabled anyway; a build that wants it fills the field, which works everywhere.
+        /// </remarks>
+        private DocumentCatalogue Catalogue
+        {
+            get
+            {
+                if (_catalogue != null)
+                    return _catalogue;
+
+#if UNITY_EDITOR
+                if (_foundCatalogue == null)
+                {
+                    string[] found = UnityEditor.AssetDatabase.FindAssets($"t:{nameof(DocumentCatalogue)}");
+                    if (found.Length > 0)
+                    {
+                        _foundCatalogue = UnityEditor.AssetDatabase.LoadAssetAtPath<DocumentCatalogue>(
+                            UnityEditor.AssetDatabase.GUIDToAssetPath(found[0]));
+                    }
+                }
+
+                return _foundCatalogue;
+#else
+                return null;
+#endif
+            }
+        }
+
         // ------------------------------------------------------------------ helpers
 
         /// <summary>
@@ -785,6 +1083,39 @@ namespace Overworked.Dev
                 return result;
             }
 
+            if (verb == "document" && position == 1)
+            {
+                DocumentCatalogue catalogue = Catalogue;
+                if (catalogue != null)
+                {
+                    for (int i = 0; i < catalogue.Count; i++)
+                        result.Add(i.ToString());
+                }
+
+                return result;
+            }
+
+            if (verb == "queue" && position == 1)
+            {
+                List<Printer> printers = FindPrinters();
+                for (int i = 0; i < printers.Count; i++)
+                    result.Add(i.ToString());
+
+                return result;
+            }
+
+            if (verb == "queue" && position == 2)
+            {
+                DocumentStore store = DocumentStore.Instance;
+                if (store != null)
+                {
+                    for (int id = 0; id < store.Count; id++)
+                        result.Add(id.ToString());
+                }
+
+                return result;
+            }
+
             bool placingFurniture = verb == "spawn" && position == 2
                 && tokens.Length > 1 && tokens[1].ToLowerInvariant() == "furniture";
 
@@ -906,6 +1237,32 @@ namespace Overworked.Dev
 
             return builder.Length > 0 ? builder.ToString() : "(none assigned)";
         }
+
+        /// <summary>
+        /// Every printer in the scene, in the order the console numbers them.
+        /// </summary>
+        /// <remarks>
+        /// Sorted by name, because these numbers are printed by one command and typed into
+        /// another. An order taken from the scene hierarchy would be a different order after the
+        /// next load, and after that a different order again once someone adds a machine.
+        /// </remarks>
+        private static List<Printer> FindPrinters()
+        {
+            List<Printer> printers = new(FindObjectsByType<Printer>(FindObjectsInactive.Exclude));
+            printers.Sort((a, b) => string.CompareOrdinal(a.name, b.name));
+            return printers;
+        }
+
+        /// <summary>
+        /// How full a container is, as count/capacity, or count/unlimited when it has no ceiling.
+        /// </summary>
+        /// <remarks>
+        /// Unlimited containers report a capacity of zero or less, so printing the raw pair would
+        /// read as "3/0" and look like a bug in the machine rather than a property of the
+        /// container.
+        /// </remarks>
+        private static string Describe(ContainerBase container) =>
+            container.IsUnlimited ? $"{container.Count}/unlimited" : $"{container.Count}/{container.Capacity}";
 
         /// <summary>
         /// Finds the player this peer owns.
