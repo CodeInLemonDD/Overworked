@@ -45,7 +45,7 @@ rm -rf "$T"
 | **W1 打印机** | `Stations/Printer.cs`、`Stations/PrinterDisplay.cs` | P0 | P0 之后 |
 | **W2 电脑工位** | `Stations/Computer.cs`(新)、`UI/ComputerPanel.cs`(新)、`PlayerInteraction.cs` | P0 | P0 之后 |
 | **W3 控制台** | `Dev/DevConsole.cs` | P0 | P0 之后 |
-| **W4 纸箱与仪表** | `UI/ContainerGauge.cs`(新)、`Stations/PaperBox.cs` | **无** | **立刻** |
+| **W4 纸箱与仪表** | `UI/ContainerGauge.cs`(新)、`Stations/SupplyBox.cs` | **无** | **立刻** |
 
 **`DebugHud` 不是窗口** —— 代码已经写完了,只差放进场景。接线清单见本文末尾。
 
@@ -466,7 +466,7 @@ ServerRpc 和 TargetRpc 是反的:
 - **FetchSeconds 的计时不实现。** DocumentCatalogue 里有这个字段,但「Internet 的要等一会儿」
   这轮先当 0 处理。写个注释说明这里将来要接计时
 - **不要做队列满的提示**。ServerTryAdd 返回 false 就当没发生
-  (和 PaperBox 空了的处理一样是静默的)
+  (和 SupplyBox 空了的处理一样是静默的)
 
 ## 交付
 
@@ -537,12 +537,12 @@ ServerRpc 和 TargetRpc 是反的:
 1. CONSTRAINTS.md —— 硬约束和已冻结接口,改代码前必读
 2. WINDOWS-DATA.md 的「一、这一轮在做的事」
 3. DEVELOPMENT.md
-4. 你自己的文件:Assets/Scripts/Stations/PaperBox.cs
+4. 你自己的文件:Assets/Scripts/Stations/SupplyBox.cs
 5. 参考 Assets/Scripts/UI/DebugHud.cs —— 本项目「界面用代码搭」的样板
 
 ## 通用规则
 
-- 只改你名下的文件:UI/ContainerGauge.cs(新)、Stations/PaperBox.cs。需要动别人的文件停下来问
+- 只改你名下的文件:UI/ContainerGauge.cs(新)、Stations/SupplyBox.cs。需要动别人的文件停下来问
 - 交付前必须自己跑离线编译(命令见 WINDOWS-DATA.md)
 
 ## 这个窗口现在就能开
@@ -576,7 +576,7 @@ ServerRpc 和 TargetRpc 是反的:
 
 样式你定。用 TMP 文字 + 色块是最省事的做法(项目已经有 simhei SDF 字体)。
 
-### 2. PaperBox.cs 的复核
+### 2. SupplyBox.cs 的复核
 
 代码上一轮写完了但**从来没跑起来过**。读一遍,确认:
 - _payloadIndex 默认 -1 这条路径是对的(印出来的是 prefab 原始样子)

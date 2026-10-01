@@ -144,14 +144,14 @@ PaperBox (根)
 ├─ ContainerBase          ← 容量 3~4
 ├─ PlacementBlocker
 ├─ 碰撞体
-├─ PaperBox
+├─ SupplyBox
 └─ (不挂 ContainerView —— 只关心剩几张,该用指示灯 / 滚动条)
 ```
 
 | 组件 | 字段 | 填 |
 |---|---|---|
 | 根 | `NetworkObject` | 加上 |
-| 根 `PaperBox` | `_container` | 根的 `ContainerBase` |
+| 根 `SupplyBox` | `_container` | 根的 `ContainerBase` |
 | | `_payloadIndex` | **0** ← **必须和打印机的 `_paperPayloadIndex` 是同一个数** |
 | | `_catalogue` | `PayloadCatalogue`(只用来在启动时校验索引) |
 | | `_refillSeconds` | `8`(盲设;这是「一张纸的价格」,用走路付) |

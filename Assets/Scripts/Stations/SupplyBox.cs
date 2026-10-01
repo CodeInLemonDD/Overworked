@@ -9,12 +9,12 @@ using UnityEngine;
 namespace Overworked.Stations
 {
     /// <summary>
-    /// A free source of raw material that restocks itself, slowly.
+    /// A free source of one kind of material that restocks itself, slowly.
     /// </summary>
     /// <remarks>
     /// Material here is bought with time, not money. There is no price, and no way to use the box
     /// up for good: leave it alone and it fills back, so a player who needs paper is delayed
-    /// rather than stuck. That is the whole point of the arrangement — the real cost of a sheet is
+    /// rather than stuck. That is the whole point of the arrangement — the real cost of an item is
     /// the walk to fetch it, and a cost measured in seconds cannot deadlock while a cost measured
     /// in something spendable can. The score is a monotonic total that is never spent, for the
     /// same reason: a score you could spend would be a second currency, and the game would be able
@@ -24,13 +24,13 @@ namespace Overworked.Stations
     /// ContainerBase holding the stock, a PlacementBlocker so nothing may be placed in the cell
     /// the machine stands in, and the collider the player's sector scan finds.
     ///
-    /// The stock is entries, never objects. A sheet does not exist until somebody asks for one,
+    /// The stock is entries, never objects. An item does not exist until somebody asks for one,
     /// which is what keeps the box invisible to the grid, to placement probes and to the cleaner.
     /// What comes out is a real object made by <see cref="GrabbableSpawner"/>, like every other
     /// object in the game, and handed straight into the hands of whoever asked.
     /// </remarks>
     [DisallowMultipleComponent]
-    public class PaperBox : StationBase
+    public class SupplyBox : StationBase
     {
         [Header("Stock")]
 
@@ -39,9 +39,9 @@ namespace Overworked.Stations
         /// </summary>
         /// <remarks>
         /// On this object's root. Its capacity is the buffer: a box nobody has touched for a while
-        /// holds that many sheets, and the restock rate is what a player drains past.
+        /// holds that many items, and the restock rate is what a player drains past.
         /// </remarks>
-        [Tooltip("Container on this object's root holding the box's stock. Its capacity is how many sheets can be waiting.")]
+        [Tooltip("Container on this object's root holding the box's stock. Its capacity is how many items can be waiting.")]
         [SerializeField]
         private ContainerBase _container;
 
@@ -58,7 +58,7 @@ namespace Overworked.Stations
         /// The default is -1, which leaves the grabbable prefab exactly as authored, so the box
         /// works before a catalogue exists at all. Set a real index once one does.
         /// </remarks>
-        [Tooltip("Index into the payload catalogue for one sheet. -1 hands out the bare prefab; set this to the same index the printer reads as paper.")]
+        [Tooltip("Index into the payload catalogue for one item. -1 hands out the bare prefab; set this to the same index the machine downstream reads this material as.")]
         [Min(-1)]
         [SerializeField]
         private int _payloadIndex = -1;
@@ -89,7 +89,7 @@ namespace Overworked.Stations
         /// purpose: a box that kept up with a player standing at it would make fetching pointless,
         /// and fetching is the loop.
         /// </remarks>
-        [Tooltip("Seconds between restocks. The price of a sheet, paid in walking.")]
+        [Tooltip("Seconds between restocks. The price of one item, paid in walking.")]
         [Min(0.01f)]
         [SerializeField]
         private float _refillSeconds = 8f;
@@ -142,7 +142,7 @@ namespace Overworked.Stations
 
             if (_container == null)
             {
-                Debug.LogError($"{nameof(PaperBox)} on {gameObject.name} has no {nameof(ContainerBase)} assigned; it has nothing to hand out.", this);
+                Debug.LogError($"{nameof(SupplyBox)} on {gameObject.name} has no {nameof(ContainerBase)} assigned; it has nothing to hand out.", this);
                 return;
             }
 
@@ -153,7 +153,7 @@ namespace Overworked.Stations
             if (_payloadIndex >= 0 && _catalogue == null)
             {
                 Debug.LogError(
-                    $"{nameof(PaperBox)} on {gameObject.name} names payload index {_payloadIndex} but has no " +
+                    $"{nameof(SupplyBox)} on {gameObject.name} names payload index {_payloadIndex} but has no " +
                     $"{nameof(PayloadCatalogue)} assigned, so nothing can resolve it; it will hand out unmodified " +
                     "objects. Assign the same catalogue everything else uses, or set the index to -1 if bare " +
                     "prefabs are what you want.",
@@ -162,7 +162,7 @@ namespace Overworked.Stations
             else if (_payloadIndex >= 0 && !_catalogue.TryGet(_payloadIndex, out _))
             {
                 Debug.LogError(
-                    $"{nameof(PaperBox)} on {gameObject.name} points at payload index {_payloadIndex}, which the " +
+                    $"{nameof(SupplyBox)} on {gameObject.name} points at payload index {_payloadIndex}, which the " +
                     "assigned catalogue does not define; it will hand out unmodified objects.",
                     this);
             }
@@ -193,7 +193,7 @@ namespace Overworked.Stations
             if (_container.IsUnlimited)
             {
                 Debug.LogWarning(
-                    $"{nameof(PaperBox)} on {gameObject.name} has an unlimited container, so it has no buffer to " +
+                    $"{nameof(SupplyBox)} on {gameObject.name} has an unlimited container, so it has no buffer to " +
                     "restock into and starts empty. Set its capacity to the number of sheets the box should hold " +
                     "(a small one — the walk is meant to be the price of a sheet).",
                     this);
@@ -243,7 +243,7 @@ namespace Overworked.Stations
         }
 
         /// <summary>
-        /// Server: hands one sheet to the player who asked, if their hands are free.
+        /// Server: hands one item to the player who asked, if their hands are free.
         /// </summary>
         /// <remarks>
         /// Both refusals are silent. A player with full hands and a player at an empty box are
@@ -255,7 +255,7 @@ namespace Overworked.Stations
         /// stopped responding.
         ///
         /// Nobody owns the stock, and nothing downstream will either: paper is a shared pool,
-        /// the same sheet whoever carried it to the machine, and feeding one in scores nothing.
+        /// the same item whoever carried it to the machine, and feeding one in scores nothing.
         /// Ownership is a property of a finished document, which arrives from the computer
         /// already carrying a faction — not of the material that goes into the machine.
         /// </remarks>
@@ -275,7 +275,7 @@ namespace Overworked.Stations
                 return;
 
             /* Spent only once the object exists, so a spawn that failed for any reason leaves the
-             * stock where it was instead of quietly costing a sheet. */
+             * stock where it was instead of quietly costing an item. */
             _container.ServerTryRemoveLast();
 
             /* Marked held as well as handed over. See ServerHandToPlayer: "are the hands empty"

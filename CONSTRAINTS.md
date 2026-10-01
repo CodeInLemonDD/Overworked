@@ -287,11 +287,16 @@ public static bool IsHeldBy(NetworkManager manager, int clientId);   // 服务�
 
 | 位置 | 字段 |
 |---|---|
-| `PaperBox` | `_payloadIndex`(盒子吐出的东西) |
+| `SupplyBox` | `_payloadIndex`(盒子吐出的东西) |
 | `Printer` | 纸索引 / 墨索引 / 产物索引 |
 | `Object.prefab` | `NetworkGrabbable._catalogue` |
 | 各 `ContainerView` | `_catalogue` |
 | `DebugHud` | `_catalogue`(可选,不指就显示 `payload N`) |
+
+> **`SupplyBox` 原来叫 `PaperBox`。** 第一个箱子的名字把「物品」写进了「种类」,
+> 而墨箱、文件夹箱挂上去就成了谎。**第一轮的交付说明(`WINDOWS-2.md` / `WINDOWS-W4.md` /
+> `WINDOWS.md`)里仍用旧名**,那些是当时的记录,不去改它。
+> 三个名字从此各司其职:**`PaperBox` / `InkBox` / `FolderBox` 是 prefab,`SupplyBox` 是脚本。**
 
 **没有任何代码层的地方定义「0 是纸」。** 填错的表现是「箱子吐出墨盒」或「打印机不认纸」,而且**要跑起来才发现**,编译期零提示。HUD 是最便宜的验证工具:台面上显示 `纸 x3` 说明索引通了,显示 `payload 0 x3` 说明没通。
 
@@ -388,7 +393,7 @@ payload / 编号 / 队伍 / 文档 id 四样,**缺一不可地在 `Spawn()` 之�
 | P0 | `Containers/*`、`NetworkGrabbable` 换装、两处硬性修复 | — | **完成** |
 | P0.1 | `Stations/StationBase.cs`、`PlayerInteraction` 交互通道 | P0 | **完成** |
 | W1 打印机 | `Stations/Printer.cs`、`Stations/PrinterQueue.cs` | P0 + P0.1 | **可开工** |
-| W2 原料箱 | `Stations/PaperBox.cs` | P0 + P0.1 | **可开工** |
+| W2 原料箱 | `Stations/SupplyBox.cs` | P0 + P0.1 | **可开工** |
 | W3 吸附阻挡 | `Interaction/PlacementBlocker.cs`、`Interaction/SnapSurface.cs` | 无 | 完成 |
 | W4 保洁阿姨 | `Npc/Cleaner.cs` | 无 | 完成 |
 | W5 体力 | `Player/PlayerStamina.cs` + `PlayerMovementPrediction.cs`(独占) | 无 | 完成 |
