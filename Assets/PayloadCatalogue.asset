@@ -12,7 +12,10 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: b68bf1e9bf4f3c8479edae35d01e6b39, type: 3}
   m_Name: PayloadCatalogue
   m_EditorClassIdentifier: Assembly-CSharp::Overworked.Containers.PayloadCatalogue
-  _payloads:
-  - {fileID: 560348858155662447, guid: c4e56f8d978f72540a81836eadce088e, type: 3}
-  - {fileID: 560348858155662447, guid: 8f1c6de8ecd2fc4408b42d1712086fb8, type: 3}
-  - {fileID: 560348858155662447, guid: bf67d54aa18477e489d53e305f063341, type: 3}
+  _entries:
+  - Payload: {fileID: 560348858155662447, guid: c4e56f8d978f72540a81836eadce088e, type: 3}
+    Badge: {fileID: 560348858155662447, guid: 1f1b97143b4dd994e828c635a2afba22, type: 3}
+  - Payload: {fileID: 560348858155662447, guid: 8f1c6de8ecd2fc4408b42d1712086fb8, type: 3}
+    Badge: {fileID: 560348858155662447, guid: b6dd42bbde1671a45b10573a099baa98, type: 3}
+  - Payload: {fileID: 560348858155662447, guid: bf67d54aa18477e489d53e305f063341, type: 3}
+    Badge: {fileID: 0}
