@@ -108,6 +108,16 @@ namespace Overworked.Stations
         /// </summary>
         private float _refillTimer;
 
+        /// <summary>
+        /// Which payload this box hands out.
+        /// </summary>
+        /// <remarks>
+        /// Read by <see cref="UI.BoxBadge"/>, which draws the matching logo. It reads the index
+        /// from here rather than keeping one of its own, so that a box and its logo cannot be
+        /// set to different payloads — which would look entirely correct on screen.
+        /// </remarks>
+        public int PayloadIndex => _payloadIndex;
+
         public override void OnStartNetwork()
         {
             base.OnStartNetwork();

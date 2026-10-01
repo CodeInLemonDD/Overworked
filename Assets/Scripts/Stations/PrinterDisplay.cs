@@ -1,5 +1,6 @@
 using Overworked.Containers;
 using Overworked.Documents;
+using Overworked.Visuals;
 using UnityEngine;
 
 namespace Overworked.Stations
@@ -265,14 +266,9 @@ namespace Overworked.Stations
             if (prefab == null)
                 return false;
 
-            Clear(slot);
+            CosmeticCopy.Clear(slot);
 
-            GameObject content = Instantiate(prefab, slot);
-            content.transform.localPosition = Vector3.zero;
-            content.transform.localRotation = Quaternion.identity;
-            content.transform.localScale = Vector3.one;
-
-            MakeCosmetic(content);
+            GameObject content = CosmeticCopy.Instantiate(slot, prefab);
             ApplyLabel(content, document);
 
             return true;
@@ -293,53 +289,6 @@ namespace Overworked.Stations
         {
             foreach (PayloadLabel label in content.GetComponentsInChildren<PayloadLabel>(includeInactive: true))
                 label.SetVariant(document.Number, document.Team);
-        }
-
-        /// <summary>
-        /// Throws away whatever is in a slot.
-        /// </summary>
-        /// <remarks>
-        /// Deactivated and detached before being destroyed, because Destroy is deferred to the
-        /// end of the frame and a copy that is still parented and still enabled is still drawn
-        /// and still answers queries for the rest of it.
-        /// </remarks>
-        private static void Clear(Transform slot)
-        {
-            for (int i = slot.childCount - 1; i >= 0; i--)
-            {
-                GameObject child = slot.GetChild(i).gameObject;
-                child.SetActive(false);
-                child.transform.SetParent(null, worldPositionStays: false);
-                Destroy(child);
-            }
-        }
-
-        /// <summary>
-        /// Strips everything that would let a drawn copy take part in the world.
-        /// </summary>
-        /// <remarks>
-        /// The same treatment <see cref="ContainerView"/> gives its stand-ins, and for the same
-        /// reason: these are pictures of objects. A live collider on one would be found by the
-        /// player's pickup sector, by the placement probe and by the station scan, and a live
-        /// Rigidbody would let a picture push the machine's own contents around.
-        ///
-        /// Colliders are disabled before being destroyed rather than only destroyed, because
-        /// Destroy is deferred to the end of the frame and a live collider answers queries
-        /// during that window.
-        /// </remarks>
-        private static void MakeCosmetic(GameObject visual)
-        {
-            foreach (Collider collider in visual.GetComponentsInChildren<Collider>(includeInactive: true))
-            {
-                collider.enabled = false;
-                Destroy(collider);
-            }
-
-            foreach (Rigidbody body in visual.GetComponentsInChildren<Rigidbody>(includeInactive: true))
-            {
-                body.isKinematic = true;
-                Destroy(body);
-            }
         }
     }
 }

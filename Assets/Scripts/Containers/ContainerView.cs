@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using Overworked.Visuals;
 using UnityEngine;
 
 namespace Overworked.Containers
@@ -151,33 +152,10 @@ namespace Overworked.Containers
                 visual.transform.localRotation = Quaternion.identity;
                 visual.transform.localScale = Vector3.one * _itemScale;
 
-                MakeCosmetic(visual);
+                CosmeticCopy.Strip(visual);
 
                 _visuals.Add(visual);
                 slot++;
-            }
-        }
-
-        /// <summary>
-        /// Strips everything that would let a stand-in take part in the world.
-        /// </summary>
-        /// <remarks>
-        /// Colliders are disabled before being destroyed because Destroy is deferred to the
-        /// end of the frame, and a live collider would be picked up by pickup queries and by
-        /// placement probes during that window.
-        /// </remarks>
-        private static void MakeCosmetic(GameObject visual)
-        {
-            foreach (Collider collider in visual.GetComponentsInChildren<Collider>(includeInactive: true))
-            {
-                collider.enabled = false;
-                Destroy(collider);
-            }
-
-            foreach (Rigidbody body in visual.GetComponentsInChildren<Rigidbody>(includeInactive: true))
-            {
-                body.isKinematic = true;
-                Destroy(body);
             }
         }
     }
