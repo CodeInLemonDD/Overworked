@@ -157,6 +157,19 @@ namespace Overworked.Interaction
         private readonly SyncVar<int> _variantTeam = new(-1);
 
         /// <summary>
+        /// Which document in the store this object is, or -1 when it is not a document.
+        /// Replicated.
+        /// </summary>
+        /// <remarks>
+        /// The number and the team already ride on this object, so a sheet in somebody's hands
+        /// looks right without this. What this adds is the way back: a container holds documents
+        /// as Data entries, which are ids, so an object that cannot say which id it is would drop
+        /// its number the moment it was put into a folder. Nothing reads it yet — folders are the
+        /// first thing that will.
+        /// </remarks>
+        private readonly SyncVar<int> _dataId = new(-1);
+
+        /// <summary>
         /// The payload instance currently attached, or null.
         /// </summary>
         /// <remarks>
@@ -221,6 +234,11 @@ namespace Overworked.Interaction
         /// The team the document on this object belongs to, or -1.
         /// </summary>
         public int VariantTeam => _variantTeam.Value;
+
+        /// <summary>
+        /// Which document this object is, or -1 when it is not one.
+        /// </summary>
+        public int DataId => _dataId.Value;
 
         /// <summary>
         /// Server-only: the cell this object was last placed on.
@@ -324,6 +342,33 @@ namespace Overworked.Interaction
 
             _variantNumber.Value = number;
             _variantTeam.Value = team;
+        }
+
+        /// <summary>
+        /// Server: records which document this object is.
+        /// </summary>
+        /// <remarks>
+        /// Set before spawning, alongside the payload and the variant and for the same reason:
+        /// SyncVar.OnChange does not fire for an initial value, so a value written afterwards
+        /// travels as a change and every peer sees the object exist first without it.
+        ///
+        /// Not marked [Server] — see <see cref="ServerSetPayload"/>. That attribute compiles to
+        /// an IsServerInitialized check, which is false in the window between
+        /// GetPooledInstantiated and Spawn, which is exactly when this has to be callable.
+        ///
+        /// Nothing subscribes to this changing, unlike the other two: a number or a team is
+        /// drawn on the object, so a late change has to be re-applied, whereas this is only read
+        /// when the object goes back into a container. There is nothing to catch up on.
+        /// </remarks>
+        public void ServerSetDataId(int dataId)
+        {
+            if (!FishNet.InstanceFinder.IsServerStarted)
+            {
+                Debug.LogWarning($"{nameof(ServerSetDataId)} was called on a peer that is not the server; ignored.", this);
+                return;
+            }
+
+            _dataId.Value = dataId;
         }
 
         /// <summary>
