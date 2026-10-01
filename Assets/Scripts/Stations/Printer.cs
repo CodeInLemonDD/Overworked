@@ -391,10 +391,16 @@ namespace Overworked.Stations
         /// </remarks>
         private void ValidateConfiguration()
         {
-            if (_paper == null || _ink == null || _output == null || _queue == null)
+            /* Named one by one rather than as "one of its containers". This fires when a prefab
+             * predates a slot being added -- which is exactly when whoever sees it is staring at
+             * an Inspector trying to work out which box is empty. A message that will not say
+             * which one sends them to the source instead, and the source is four hundred lines
+             * away from the field. */
+            string missing = MissingContainers();
+            if (missing != null)
             {
                 Debug.LogError(
-                    $"{nameof(Printer)} on {gameObject.name} is missing one of its containers and will do nothing.",
+                    $"{nameof(Printer)} on {gameObject.name} has nothing assigned to {missing}, so it will do nothing. Assign it on the prefab.",
                     this);
                 return;
             }
@@ -445,6 +451,33 @@ namespace Overworked.Stations
                     $"{nameof(Printer)} on {gameObject.name} has a cartridge of {_printsPerCartridge} sheets, so no job can ever start.",
                     this);
             }
+        }
+
+        /// <summary>
+        /// The names of the container fields with nothing assigned, or null when all four are set.
+        /// </summary>
+        /// <remarks>
+        /// Only reached from the failure path at startup, so the list is built fresh rather than
+        /// kept in a buffer: a field held for a call that happens once per machine is state to
+        /// read past for no gain.
+        /// </remarks>
+        private string MissingContainers()
+        {
+            List<string> missing = new();
+
+            if (_paper == null)
+                missing.Add(nameof(_paper));
+
+            if (_ink == null)
+                missing.Add(nameof(_ink));
+
+            if (_output == null)
+                missing.Add(nameof(_output));
+
+            if (_queue == null)
+                missing.Add(nameof(_queue));
+
+            return missing.Count == 0 ? null : string.Join(", ", missing);
         }
 
         /// <summary>
