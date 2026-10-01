@@ -417,7 +417,13 @@ namespace Overworked.Interaction
             _payload = Instantiate(prefab, root);
             _payload.transform.localPosition = Vector3.zero;
             _payload.transform.localRotation = Quaternion.identity;
-            _payload.transform.localScale = Vector3.one;
+
+            /* Scale is deliberately not touched, here or in CosmeticCopy. A payload prefab's own
+             * scale is part of how it looks, exactly like its mesh: paper and ink are drawn as
+             * flattened slabs, with one axis a fraction of the others, and forcing the copy to
+             * unit scale turns every sheet into a block. Do not add a line back to normalise it --
+             * three copies of that line existed, and each one was invisible until the first
+             * prefab was authored at anything other than unit scale. */
 
             ApplyVariant(_payload);
             RefreshGeometry();
