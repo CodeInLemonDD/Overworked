@@ -150,7 +150,10 @@ namespace Overworked.Containers
                 GameObject visual = Instantiate(prefab, Root);
                 visual.transform.localPosition = _itemOffset + _itemStep * slot;
                 visual.transform.localRotation = Quaternion.identity;
-                visual.transform.localScale = Vector3.one * _itemScale;
+                /* Multiplied into the prefab's own scale rather than replacing it. Payload
+                 * prefabs carry their size on the root -- one axis is often a hundredth of the
+                 * others -- so overwriting it draws a flattened sheet as a solid block. */
+                visual.transform.localScale *= _itemScale;
 
                 CosmeticCopy.Strip(visual);
 

@@ -39,8 +39,12 @@ namespace Overworked.Visuals
             GameObject copy = Object.Instantiate(prefab, slot);
             copy.transform.localPosition = Vector3.zero;
             copy.transform.localRotation = Quaternion.identity;
-            copy.transform.localScale = Vector3.one;
 
+            /* Scale is deliberately left alone. Position and rotation are the slot's to decide --
+             * where the copy sits and which way it faces -- but a prefab's own scale is part of
+             * how it looks, exactly like its mesh. Flattening is how these logos are made: the
+             * badge prefabs are authored with one axis at a hundredth, and forcing the copy back
+             * to unit scale un-flattens them into solid blocks. */
             Strip(copy);
             return copy;
         }
