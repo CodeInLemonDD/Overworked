@@ -5,7 +5,7 @@
 1. **硬约束** —— 读 FishNet 4.7.3 源码核实过的,和玩法无关,换多少轮设计都不变,但违反任何一条都会当场坏掉
 2. **已冻结的接口** —— P0 产出的容器与 payload 机制,依赖它的模块按这里的签名写,不要自己另起一套
 
-最后更新:2026-10-01
+最后更新:2026-10-01(第二轮)
 
 ---
 
@@ -73,7 +73,7 @@
 
 ---
 
-## 二、已冻结的接口(P0 产出)
+## 二、已冻结的接口(P0 与第二轮产出)
 
 命名空间 `Overworked.Containers`。**依赖它们的模块按这些签名写,不要另起一套。**
 
@@ -203,14 +203,16 @@ public class PayloadLabel : MonoBehaviour
 
 ```csharp
 public static NetworkObject SpawnGrabbable(int payloadIndex, Vector3 position,
-                                           Quaternion rotation, NetworkConnection owner = null);
+                                           Quaternion rotation, NetworkConnection owner = null,
+                                           int variantNumber = -1, int variantTeam = -1,
+                                           int dataId = -1);
 public static void CollectSpawnedGrabbables(NetworkManager manager, List<NetworkGrabbable> buffer);
 public static void DespawnAllGrabbables(NetworkManager manager, List<NetworkGrabbable> buffer);
 ```
 
 `GrabbableSpawner` 自己也有一个 `_payloadIndex`(默认 -1),决定开局那批物体穿什么 —— 它是唯一造物入口,却曾经说不出「造什么」。
 
-**任何需要造一个可抓物体的地方都用 `SpawnGrabbable`** —— 它是唯一入口,免得各模块对「怎么造物体」各有一套。payload 在 spawn **之前**设好,这样它随 spawn 消息一起到达。
+**任何需要造一个可抓物体的地方都用 `SpawnGrabbable`** —— 它是唯一入口,免得各模块对「怎么造物体」各有一套。payload、编号、队伍、文档 id **全部在 spawn 之前设好**,这样它们随 spawn 消息一起到达。**这个不变量属于这个方法,不属于调用者** —— 见下面「为什么四样东西都在 `SpawnGrabbable` 里设」。
 
 `CollectSpawnedGrabbables` / `DespawnAllGrabbables` 是约束 #1 的唯一正确实现,不要在别处重写。
 
@@ -311,6 +313,71 @@ public static bool IsHeldBy(NetworkManager manager, int clientId);   // 服务�
 打印机为此把纸和墨拆成了**两个独立容器**(纸 6 / 墨 1 盒),因为**生命周期不同的资源不该共用一个容器**:纸是「一张一用」,墨是「一盒 8 张」,塞进同一个槽位模型就长出了「纸满了装不进墨」这种荒谬的失败模式。
 
 **这条对将来的文件夹、章笔座、任何「收进去办事」的容器同样成立。**
+
+### 文档数据层 —— 第二轮
+
+命名空间 `Overworked.Documents`。**一份文档是「值」,不是「物体」** —— 库里的一条记录,出口时才变成一个可抓物体。
+
+```csharp
+public enum DocumentSource { Filing = 0, Internet = 1 }
+
+[System.Serializable]
+public struct DocumentRecord     // 只有 public 字段,同 ContainerEntry 的规矩
+{
+    public int PayloadIndex;     // 外观模板,指向 PayloadCatalogue
+    public int Number;           // 编号,从 1 开始,按 PayloadIndex 各自计数
+    public int Team;             // 队伍,-1 = 不上色
+    public int Source;           // DocumentSource,存成 int
+}
+
+public class DocumentCatalogue : ScriptableObject   // 「可获取的规格表」,不是已存在的文档
+{
+    public int Count { get; }
+    public bool TryGet(int index, out Spec spec);
+    public Spec Get(int index);
+
+    [System.Serializable]
+    public struct Spec
+    {
+        public string DisplayName;   // 面板上显示的名字
+        public int PayloadIndex;     // 印出来是什么样
+        public int Source;           // DocumentSource
+        public float FetchSeconds;   // 获取耗时。**至今没有任何代码读它**
+    }
+}
+
+public class DocumentStore : NetworkBehaviour      // 场景里一个 NetworkObject 上挂一个
+{
+    public static DocumentStore Instance { get; }   // 还没 spawn 时是 null,那是正常状态
+    public int Count { get; }
+    public bool TryGet(int id, out DocumentRecord record);   // 返回 false 是预期的,不是异常
+
+    [Server] public int ServerCreate(int payloadIndex, int team, int source);  // 返回新 id
+}
+
+// NetworkGrabbable 新增
+public int DataId { get; }                 // -1 = 不是文档(纸、墨)
+public void ServerSetDataId(int id);       // 靠 SpawnGrabbable 调,别在调用点自己调
+
+// Printer 新增
+public ContainerBase Queue { get; }        // 任务队列。**只塞 ContainerEntry.ForData**,别的一律在队头被丢弃并报警
+public int PrintingDocument { get; }       // 正在打的那份文档的 id
+```
+
+**契约(写下来是因为多次被问):**
+
+- **id 就是 `DocumentStore` 里的下标**,只能追加,**一局内不删**。所以「id 永远有效」成立,也就不需要「已删除」这种状态
+- **编号在服务端分配**,扫同类最大编号加一。不要自己传编号进来 —— 编号是 store 给的
+- **`Data` 条目 = 文档,`Entity` 条目 = 原料。没有例外。** 让 `Entity` 也能带编号,「一份文档」就有了两种写法,每个后续模块都得先问「你指哪种」
+- **`Printer.Queue` 是给别的模块喂东西的口子。** 加一个「别人要往里喂东西的容器」时,**那个口子属于交付范围** —— 只放实现里等于接口没写完(第一轮 W1 就漏了这条,W2 和 W3 同时撞上)
+
+### 为什么四样东西都在 `SpawnGrabbable` 里设
+
+payload / 编号 / 队伍 / 文档 id 四样,**缺一不可地在 `Spawn()` 之前**写进 SyncVar。理由不是省事,是 `SyncVar.OnChange` **不为初值触发**:spawn 之后写会变成一次「变更」,两端先看到错的样子再自己纠正。
+
+文档 id 是四样里最阴的一个 —— **没有任何东西会显示它**,所以晚写完全看不出来,**直到有人去读它**。第一个会读的是容器:它会把物体记成一条无名的 `Entity`,**编号当场丢掉**。
+
+所以这四样都在 spawner 里设,调用点不需要记得。**任何新增的、要随 spawn 一起到的字段,都加在这里,不要加在调用点。**
 
 ---
 
