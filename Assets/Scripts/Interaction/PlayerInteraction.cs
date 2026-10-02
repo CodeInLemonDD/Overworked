@@ -3,8 +3,6 @@ using FishNet.Connection;
 using FishNet.Object;
 using FishNet.Transporting;
 using FishNet.Utility.Template;
-using Overworked.Containers;
-using Overworked.Documents;
 using Overworked.Stations;
 using Overworked.UI;
 using UnityEngine;
@@ -1171,7 +1169,7 @@ namespace Overworked.Interaction
             CmdRequestDocument(computer, printer, specIndex);
 
         /// <summary>
-        /// Server: creates the document and puts it in the machine's job queue.
+        /// Server: hands the chosen document to the machine it was ordered for.
         /// </summary>
         /// <remarks>
         /// Range is measured back to the computer the player is standing at, never to the printer
@@ -1179,9 +1177,11 @@ namespace Overworked.Interaction
         /// the walk from it to the printer is the cost the game charges for a document — so
         /// checking against the printer would forbid the only thing this station does.
         ///
-        /// Everything past that check is silent on failure. A full queue, a printer that has gone
-        /// away and a spec index that does not exist are all normal, and a station that announced
-        /// them would be reporting its own bookkeeping rather than anything the player did wrong.
+        /// Everything past the range check belongs to the machine. Whether the document exists
+        /// yet, how long it takes to arrive and whether there is room for it are one question —
+        /// how this computer acquires a document — and it is answered in one place so that a
+        /// document from the filing cabinet and one from the Internet cannot end up with two
+        /// different sets of rules.
         /// </remarks>
         [ServerRpc]
         private void CmdRequestDocument(
@@ -1203,10 +1203,6 @@ namespace Overworked.Interaction
             if (printer == null)
                 return;
 
-            DocumentCatalogue catalogue = computer.Catalogue;
-            if (catalogue == null || !catalogue.TryGet(specIndex, out DocumentCatalogue.Spec spec))
-                return;
-
             /* Range against the server's own copy of the player's transform, never against
              * anything the client reported. */
             Vector3 origin = transform.position;
@@ -1217,22 +1213,7 @@ namespace Overworked.Interaction
             if (to.sqrMagnitude > reach * reach)
                 return;
 
-            /* Room is checked before anything is made. A document created for a queue that cannot
-             * take it would exist in the store, hold a number nothing else can ever use, and be
-             * reachable by nothing — the number has no ceiling, so burning one is a permanent
-             * change made for a request that was going to be refused anyway. */
-            ContainerBase queue = printer.Queue;
-            if (queue == null || queue.IsFull)
-                return;
-
-            DocumentStore store = DocumentStore.Instance;
-            if (store == null)
-                return;
-
-            int id = store.ServerCreate(spec.PayloadIndex, TeamThisRound, spec.Source);
-
-            /* Silent when it fails, like every other full container in the project. */
-            queue.ServerTryAdd(ContainerEntry.ForData(id));
+            computer.ServerBeginFetch(specIndex, printer, TeamThisRound);
         }
 
     }

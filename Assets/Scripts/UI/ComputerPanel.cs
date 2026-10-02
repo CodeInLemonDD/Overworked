@@ -154,9 +154,48 @@ namespace Overworked.UI
         private readonly List<GameObject> _rows = new();
 
         /// <summary>
-        /// Backgrounds of the document rows, in list order, for highlighting the chosen one.
+        /// The document rows, in catalogue order.
         /// </summary>
-        private readonly List<Image> _documentRows = new();
+        private readonly List<SpecRow> _documentRows = new();
+
+        /// <summary>
+        /// When this client first saw each spec start being fetched, by catalogue index.
+        /// </summary>
+        /// <remarks>
+        /// Local, and deliberately so. The server publishes **that** a fetch is running and never
+        /// how far along it is: a countdown written to the wire ten times a second would spend
+        /// most of this project's bandwidth budget redrawing a progress bar. The duration is in
+        /// the catalogue, which every peer already holds, so each client runs the clock itself and
+        /// draws a bar that can be a network round-trip out and still be worth looking at.
+        ///
+        /// The cost is that opening the window halfway through a fetch starts its bar from the
+        /// top, and that a document can land a moment before its bar empties. Both are cosmetic,
+        /// and both are the right trade against syncing a number nothing acts on.
+        /// </remarks>
+        private readonly Dictionary<int, float> _fetchStartedAt = new();
+
+        /// <summary>
+        /// Scratch list for <see cref="PruneFetchClocks"/>, reused so a rebuild allocates nothing.
+        /// </summary>
+        private readonly List<int> _pruneBuffer = new();
+
+        /// <summary>
+        /// One row of the document column.
+        /// </summary>
+        /// <remarks>
+        /// A record rather than three lists kept the same length, because they are only ever
+        /// right together and a row that is fetching has no business lighting up as the chosen
+        /// document — so which row means which spec, and whether it can be picked at all, have
+        /// to travel with the row.
+        /// </remarks>
+        private sealed class SpecRow
+        {
+            public Button Button;
+            public Image Background;
+            public TextMeshProUGUI Label;
+            public int SpecIndex;
+            public bool Selectable;
+        }
 
         /// <summary>
         /// Printers found on the last rebuild, in the order they are listed.
@@ -226,6 +265,11 @@ namespace Overworked.UI
             _interaction = interaction;
             _computer = computer;
 
+            /* Followed rather than sampled: a fetch landing while the window is open changes what
+             * the document column can offer, and a list that only redrew when the player happened
+             * to click something would keep offering a document that is already on its way. */
+            _computer.FetchingChanged += OnFetchingChanged;
+
             /* Cached now rather than looked up when the panel closes: by then the player object may
              * be gone, and leaving input switched off on a player that is still alive is the worst
              * way to find out. */
@@ -237,9 +281,10 @@ namespace Overworked.UI
 
             /* A document is chosen before the panel is shown, so the first printer row a player
              * clicks always has something to send. Landing on an empty choice would make the first
-             * click do nothing, which reads as the window being broken. */
-            List<DocumentCatalogue.Spec> specs = AvailableSpecs();
-            Choose(specs.Count > 0 ? 0 : -1);
+             * click do nothing, which reads as the window being broken. A row that is already
+             * waiting is passed over for the same reason — it cannot be sent, so it cannot be what
+             * the first click spends. */
+            Choose(FirstSelectableSpec());
 
             _canvasObject.SetActive(true);
             SetGameplayInputEnabled(false);
@@ -255,6 +300,13 @@ namespace Overworked.UI
                 return;
 
             _open = false;
+
+            /* Before the reference is dropped, and unconditionally: a panel left subscribed to a
+             * machine it no longer belongs to would rebuild another window's rows. */
+            if (_computer != null)
+                _computer.FetchingChanged -= OnFetchingChanged;
+
+            _fetchStartedAt.Clear();
 
             if (_canvasObject != null)
                 _canvasObject.SetActive(false);
@@ -292,7 +344,12 @@ namespace Overworked.UI
             }
 
             if (Keyboard.current != null && Keyboard.current.escapeKey.wasPressedThisFrame)
+            {
                 Hide();
+                return;
+            }
+
+            RefreshFetchLabels();
         }
 
         // ------------------------------------------------------------------ building
@@ -417,6 +474,12 @@ namespace Overworked.UI
         /// <summary>
         /// Builds the document column.
         /// </summary>
+        /// <remarks>
+        /// A row whose document is already on its way is drawn in place and made unclickable
+        /// rather than removed. A list that shortened itself under the player's cursor would move
+        /// whatever they were about to press, and ordering the same document twice is the mistake
+        /// that invites.
+        /// </remarks>
         private void BuildDocumentRows(float x, float width, float firstRowY)
         {
             DocumentCatalogue catalogue = _computer.Catalogue;
@@ -427,22 +490,148 @@ namespace Overworked.UI
                 return;
             }
 
+            PruneFetchClocks(catalogue);
+
             for (int i = 0; i < catalogue.Count; i++)
             {
                 if (!catalogue.TryGet(i, out DocumentCatalogue.Spec spec))
                     continue;
 
                 int index = i;
+                bool fetching = _computer.IsFetching(i);
 
                 Button row = AddRow(
                     x,
                     firstRowY + i * (RowHeight + RowGap),
                     width,
-                    $"{spec.DisplayName}   [{SourceName(spec.Source)}]",
-                    () => Choose(index));
+                    fetching
+                        ? FetchLabel(i, BeginTracking(i))
+                        : $"{spec.DisplayName}   [{SourceName(spec.Source)}]",
+                    fetching ? null : () => Choose(index));
 
-                _documentRows.Add(row.GetComponent<Image>());
+                _documentRows.Add(new SpecRow
+                {
+                    Button = row,
+                    Background = row.GetComponent<Image>(),
+                    Label = row.GetComponentInChildren<TextMeshProUGUI>(),
+                    SpecIndex = i,
+                    Selectable = !fetching,
+                });
             }
+        }
+
+        /// <summary>
+        /// Forgets the countdowns for specs this machine is no longer waiting on.
+        /// </summary>
+        /// <remarks>
+        /// Entries are dropped, not the whole dictionary: a countdown has to survive a rebuild
+        /// caused by some other row starting or landing. The keys are copied out before the
+        /// removals, because a dictionary cannot be changed while it is being walked.
+        /// </remarks>
+        private void PruneFetchClocks(DocumentCatalogue catalogue)
+        {
+            if (_fetchStartedAt.Count == 0)
+                return;
+
+            _pruneBuffer.Clear();
+
+            foreach (KeyValuePair<int, float> entry in _fetchStartedAt)
+            {
+                if (entry.Key >= catalogue.Count || !_computer.IsFetching(entry.Key))
+                    _pruneBuffer.Add(entry.Key);
+            }
+
+            foreach (int specIndex in _pruneBuffer)
+                _fetchStartedAt.Remove(specIndex);
+
+            _pruneBuffer.Clear();
+        }
+
+        /// <summary>
+        /// Returns when this client began counting a fetch down, starting the clock if it is new.
+        /// </summary>
+        private float BeginTracking(int specIndex)
+        {
+            if (_fetchStartedAt.TryGetValue(specIndex, out float started))
+                return started;
+
+            started = Time.unscaledTime;
+            _fetchStartedAt[specIndex] = started;
+            return started;
+        }
+
+        /// <summary>
+        /// Redraws the countdown on every row that is waiting.
+        /// </summary>
+        private void RefreshFetchLabels()
+        {
+            if (_fetchStartedAt.Count == 0)
+                return;
+
+            for (int i = 0; i < _documentRows.Count; i++)
+            {
+                SpecRow row = _documentRows[i];
+
+                if (row.Label == null || row.Selectable)
+                    continue;
+                if (!_fetchStartedAt.TryGetValue(row.SpecIndex, out float started))
+                    continue;
+
+                /* Compared before it is assigned: TMP rebuilds its mesh on every set, and this
+                 * runs every frame the window is open. */
+                string text = FetchLabel(row.SpecIndex, started);
+                if (row.Label.text != text)
+                    row.Label.text = text;
+            }
+        }
+
+        /// <summary>
+        /// What a row says while its document is being acquired.
+        /// </summary>
+        /// <remarks>
+        /// Rounded up, so the row reads "3s" for the whole of the third second instead of spending
+        /// most of it on "2s". Past zero it says the download is done and the machine is the
+        /// holdup — which is exactly the state a fetch sits in when the queue has no room for it,
+        /// and the state it is in for one frame in every other case, so the wording has to be true
+        /// of the long one without being wrong about the short one.
+        /// </remarks>
+        private string FetchLabel(int specIndex, float started)
+        {
+            float remaining = Mathf.Max(0f, FetchSeconds(specIndex) - (Time.unscaledTime - started));
+
+            return remaining <= 0f
+                ? "下载完成,等待打印机…"
+                : $"下载中… {Mathf.CeilToInt(remaining)}s";
+        }
+
+        /// <summary>
+        /// How long a spec takes to acquire, or 0 when there is no such spec.
+        /// </summary>
+        private float FetchSeconds(int specIndex)
+        {
+            DocumentCatalogue catalogue = _computer != null ? _computer.Catalogue : null;
+            if (catalogue == null || !catalogue.TryGet(specIndex, out DocumentCatalogue.Spec spec))
+                return 0f;
+
+            return spec.FetchSeconds;
+        }
+
+        /// <summary>
+        /// Client: a fetch started or landed, so the document column has changed.
+        /// </summary>
+        /// <remarks>
+        /// The selection is re-applied rather than left to survive, because rebuilding the rows
+        /// throws the highlight away with them. Asking for it again also drops a selection that has
+        /// stopped being legal — which is the row that has just started waiting — so the lit row
+        /// and the row a printer press would send are always the same one.
+        /// </remarks>
+        private void OnFetchingChanged()
+        {
+            if (!_open)
+                return;
+
+            Rebuild();
+            Choose(_chosenSpec);
         }
 
         /// <summary>
@@ -619,50 +808,61 @@ namespace Overworked.UI
         // ------------------------------------------------------------------ behaviour
 
         /// <summary>
-        /// The specs this computer offers, in catalogue order.
-        /// </summary>
-        private List<DocumentCatalogue.Spec> AvailableSpecs()
-        {
-            List<DocumentCatalogue.Spec> specs = new();
-
-            DocumentCatalogue catalogue = _computer != null ? _computer.Catalogue : null;
-            if (catalogue == null)
-                return specs;
-
-            for (int i = 0; i < catalogue.Count; i++)
-            {
-                if (catalogue.TryGet(i, out DocumentCatalogue.Spec spec))
-                    specs.Add(spec);
-            }
-
-            return specs;
-        }
-
-        /// <summary>
         /// Chooses a document, and lights its row.
         /// </summary>
+        /// <remarks>
+        /// A row that is fetching cannot be chosen, and this follows what actually lit up rather
+        /// than what was asked for. Leaving the selection on a row the player cannot see lit would
+        /// put it somewhere the next printer press still sends from — and what it would send is a
+        /// second fetch of a document already on its way, at full price.
+        /// </remarks>
         private void Choose(int index)
         {
-            _chosenSpec = index;
+            _chosenSpec = -1;
 
             for (int i = 0; i < _documentRows.Count; i++)
             {
-                Image row = _documentRows[i];
-                if (row != null)
-                    row.color = i == index ? RowChosenColour : RowColour;
+                SpecRow row = _documentRows[i];
+                if (row.Background == null)
+                    continue;
+
+                bool chosen = row.Selectable && row.SpecIndex == index;
+                if (chosen)
+                    _chosenSpec = index;
+
+                row.Background.color = chosen ? RowChosenColour : RowColour;
             }
+        }
+
+        /// <summary>
+        /// The first row that is on offer, or -1 when none is.
+        /// </summary>
+        private int FirstSelectableSpec()
+        {
+            for (int i = 0; i < _documentRows.Count; i++)
+            {
+                if (_documentRows[i].Selectable)
+                    return _documentRows[i].SpecIndex;
+            }
+
+            return -1;
         }
 
         /// <summary>
         /// Client: asks the server to send the chosen document to a printer.
         /// </summary>
         /// <remarks>
-        /// Closed straight afterwards. One press is one document, and whether it landed is
-        /// something the player reads off the machine rather than off this window — the server
-        /// refuses a full queue silently, so any confirmation drawn here could be a lie.
+        /// An instant document has already arrived by the time this returns, so the window has
+        /// nothing left to say and closes the way it always has — whether it landed is something
+        /// the player reads off the machine rather than off this window, because the server
+        /// refuses a full queue silently and any confirmation drawn here could be a lie.
+        ///
+        /// One that has to be fetched stays open instead. The row counting down is the only sign
+        /// the player gets that anything is happening at all, and watching the cost run out is the
+        /// whole of what the wait is for. They close it themselves once they have seen enough.
         ///
         /// The queue is deliberately not shown. How full a machine is belongs to the gauge that
-        /// will sit on the machine itself; a second readout of it here would be a second thing to
+        /// sits on the machine itself; a second readout of it here would be a second thing to
         /// keep in step.
         /// </remarks>
         private void SendTo(Printer printer)
@@ -674,7 +874,53 @@ namespace Overworked.UI
 
             _interaction.RequestDocument(_computer.NetworkObject, printer.NetworkObject, _chosenSpec);
 
+            if (FetchSeconds(_chosenSpec) > 0f)
+            {
+                MarkWaiting(_chosenSpec);
+                return;
+            }
+
             Hide();
+        }
+
+        /// <summary>
+        /// Marks a row busy without waiting to be told.
+        /// </summary>
+        /// <remarks>
+        /// A fetch that has to wait leaves the window open, which leaves the row the player just
+        /// pressed still under their finger — and a second press during the round trip orders the
+        /// same document twice, at full price both times.
+        ///
+        /// This is a guess, and every rebuild throws it away: rows are recomputed from what the
+        /// server actually says, so a request the server refused comes back on its own a round
+        /// trip later. Between rebuilds the guess can only be wrong if the server refused and said
+        /// nothing, which leaves the row counting down to zero and sitting there — so the repair
+        /// for that is closing and reopening the window, not a timer here.
+        /// </remarks>
+        private void MarkWaiting(int specIndex)
+        {
+            for (int i = 0; i < _documentRows.Count; i++)
+            {
+                SpecRow row = _documentRows[i];
+                if (row.SpecIndex != specIndex || !row.Selectable)
+                    continue;
+
+                row.Selectable = false;
+
+                /* Back to the unlit colour, the same as any other row that is waiting: the
+                 * highlight means "this is what a press would send", and a press can no longer
+                 * send it. */
+                if (row.Background != null)
+                    row.Background.color = RowColour;
+
+                if (row.Button != null)
+                    row.Button.interactable = false;
+
+                if (row.Label != null)
+                    row.Label.text = FetchLabel(specIndex, BeginTracking(specIndex));
+
+                return;
+            }
         }
 
         /// <summary>

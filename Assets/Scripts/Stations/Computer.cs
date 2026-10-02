@@ -1,5 +1,10 @@
+using System;
 using FishNet.Connection;
+using FishNet.Managing;
+using FishNet.Managing.Timing;
 using FishNet.Object;
+using FishNet.Object.Synchronizing;
+using Overworked.Containers;
 using Overworked.Documents;
 using Overworked.Interaction;
 using Overworked.UI;
@@ -20,6 +25,16 @@ namespace Overworked.Stations
     /// charges for a document is fetch-and-carry; making the player stand at the machine while it
     /// prints would delete that cost. So the only range that means anything is the one back to the
     /// computer the player is standing at — never the one to the printer they picked.
+    ///
+    /// Acquiring a document is this machine's job, not the panel's and not the printer's. A
+    /// document from the company's own files is filed straight into the chosen machine's queue;
+    /// one fetched over the Internet is held here for <c>Spec.FetchSeconds</c> first. The wait is
+    /// the whole of what "data acquisition" costs, and it is the only place the two sources differ
+    /// in behaviour rather than in labelling.
+    ///
+    /// The fetch outlives the panel that started it, on purpose: walking away from a download
+    /// does not cancel it, the same way walking away from the machine does not stop the printing.
+    /// It also outlives the player, so a fetch ordered just before a disconnect still lands.
     ///
     /// Refusals are silent. A full queue, a printer that has since gone away, and a document index
     /// that does not exist all end the same way: nothing happens. Each is a normal state for the
@@ -48,9 +63,76 @@ namespace Overworked.Stations
         private ComputerPanel _panel;
 
         /// <summary>
+        /// Documents being fetched over the Internet, oldest first.
+        /// </summary>
+        /// <remarks>
+        /// Replicated in full, because the wait is a fact about this machine that every player
+        /// standing at it should be able to see — not a private note belonging to whoever pressed
+        /// the button. Two teammates share a computer, and the second one needs to know that the
+        /// machine is already busy fetching something.
+        ///
+        /// Must stay readonly: the weaver rejects a SyncType field that is assigned to.
+        /// </remarks>
+        private readonly SyncList<DocumentFetch> _fetching = new();
+
+        /// <summary>
+        /// Time source the fetch countdown runs on, held so it can be unsubscribed from.
+        /// </summary>
+        private TimeManager _timeManager;
+
+        /// <summary>
+        /// Raised once per change to <see cref="_fetching"/>, on every peer, including the server.
+        /// </summary>
+        /// <remarks>
+        /// Local only, never networked. The same shape and the same duplicate-callback handling as
+        /// <see cref="ContainerBase.ContentsChanged"/>, so a view has one pattern to follow.
+        /// </remarks>
+        public event Action FetchingChanged;
+
+        /// <summary>
         /// The documents this computer offers.
         /// </summary>
         public DocumentCatalogue Catalogue => _catalogue;
+
+        /// <summary>
+        /// How many fetches are in flight.
+        /// </summary>
+        public int FetchingCount => _fetching.Count;
+
+        /// <summary>
+        /// Reads a fetch by position in the list.
+        /// </summary>
+        public bool TryGetFetch(int index, out DocumentFetch fetch)
+        {
+            if (index < 0 || index >= _fetching.Count)
+            {
+                fetch = default;
+                return false;
+            }
+
+            fetch = _fetching[index];
+            return true;
+        }
+
+        /// <summary>
+        /// True when this machine is already waiting on a document.
+        /// </summary>
+        /// <remarks>
+        /// The panel asks this to grey a row out. It is deliberately keyed on the spec rather than
+        /// on "is anything fetching at all": a second, different document can be ordered while the
+        /// first is still coming, and stopping the player from doing that would be the machine
+        /// inventing a rule it has no reason to have.
+        /// </remarks>
+        public bool IsFetching(int specIndex)
+        {
+            for (int i = 0; i < _fetching.Count; i++)
+            {
+                if (_fetching[i].SpecIndex == specIndex)
+                    return true;
+            }
+
+            return false;
+        }
 
         /// <summary>
         /// The panel belonging to this computer, or null when the prefab has none.
@@ -69,6 +151,20 @@ namespace Overworked.Stations
 
                 return _panel;
             }
+        }
+
+        public override void OnStartNetwork()
+        {
+            base.OnStartNetwork();
+
+            _fetching.OnChange += OnFetchingChanged;
+        }
+
+        public override void OnStopNetwork()
+        {
+            _fetching.OnChange -= OnFetchingChanged;
+
+            base.OnStopNetwork();
         }
 
         public override void OnStartServer()
@@ -90,6 +186,30 @@ namespace Overworked.Stations
                     $"{nameof(Computer)} on {gameObject.name} has no {nameof(ComputerPanel)} in its children; the panel it opens will never appear.",
                     this);
             }
+
+            /* Subscribed by hand rather than through TickNetworkBehaviour, which is where this
+             * hook normally comes from: a station has to stay a plain NetworkBehaviour, and the
+             * base class offers it. OnTick is no substitute — it runs two or three times a frame
+             * and may drop ticks, which is no basis for a timer. Same wiring as Printer. */
+            _timeManager = TimeManager;
+            if (_timeManager != null)
+                _timeManager.OnUpdate += UpdateFetches;
+        }
+
+        public override void OnStopServer()
+        {
+            if (_timeManager != null)
+            {
+                _timeManager.OnUpdate -= UpdateFetches;
+                _timeManager = null;
+            }
+
+            /* A scene object starts again on a later session, and the list is replicated rather
+             * than owned by this component's lifetime. Whatever was in flight when the session
+             * ended is not in flight in the next one. */
+            _fetching.Clear();
+
+            base.OnStopServer();
         }
 
         /// <summary>
@@ -115,6 +235,171 @@ namespace Overworked.Stations
                 return;
 
             player.ServerOpenComputerPanel(this);
+        }
+
+        /// <summary>
+        /// Server: acquires a document and files it into a machine's job queue.
+        /// </summary>
+        /// <remarks>
+        /// This is the whole of what the two sources differ in. A document from the company's own
+        /// files goes into the queue on this call; one fetched over the Internet is held first and
+        /// lands when <see cref="UpdateFetches"/> decides the wait is over.
+        ///
+        /// Room in the queue is deliberately **not** checked up front for a fetch that has to wait.
+        /// The queue can fill and empty several times during the wait, so a check made now is a
+        /// guess about the future — and at the end of the wait both available answers are wrong:
+        /// refusing throws away a wait the player has already paid for, and forcing the entry in
+        /// overflows a container that is supposed to have a size. The wait happens first and the
+        /// room is checked when it matters; see <see cref="Land"/>.
+        /// </remarks>
+        /// <returns>False when the request could not be started at all.</returns>
+        [Server]
+        public bool ServerBeginFetch(int specIndex, Printer printer, int team)
+        {
+            if (printer == null || !printer.IsSpawned)
+                return false;
+
+            if (_catalogue == null || !_catalogue.TryGet(specIndex, out DocumentCatalogue.Spec spec))
+                return false;
+
+            NetworkObject printerObject = printer.NetworkObject;
+            if (printerObject == null)
+                return false;
+
+            /* Zero is the filing cabinet: it is already here. Nothing is queued and no state is
+             * kept, so a local document cannot fail for a reason a local document has no business
+             * having. */
+            if (spec.FetchSeconds <= 0f)
+                return Land(spec, printer, team);
+
+            _fetching.Add(new DocumentFetch
+            {
+                SpecIndex = specIndex,
+                PrinterObjectId = printerObject.ObjectId,
+                Team = team,
+                ServerReadyAt = (float)Time.timeAsDouble + spec.FetchSeconds,
+            });
+
+            return true;
+        }
+
+        /// <summary>
+        /// Server: advances every fetch, landing the ones whose wait is over.
+        /// </summary>
+        /// <remarks>
+        /// Unscaled, per the project's timer rule: a dropped frame or a paused editor must not
+        /// change how long a download takes.
+        ///
+        /// A fetch that cannot land yet is left where it is and retried next frame. That happens
+        /// for two reasons and they are not alike: a printer that has gone away, which is
+        /// permanent and so is dropped, and a queue with no room, which is not. Holding on to the
+        /// second is what makes a full queue cost the player time instead of the work — the
+        /// document has not been created yet, so nothing is lost while it waits, and the number is
+        /// handed out on the frame it finally goes in.
+        /// </remarks>
+        private void UpdateFetches()
+        {
+            if (_fetching.Count == 0)
+                return;
+
+            float now = (float)Time.timeAsDouble;
+
+            for (int i = 0; i < _fetching.Count; i++)
+            {
+                DocumentFetch fetch = _fetching[i];
+                if (now < fetch.ServerReadyAt)
+                    continue;
+
+                if (!_catalogue.TryGet(fetch.SpecIndex, out DocumentCatalogue.Spec spec))
+                {
+                    _fetching.RemoveAt(i);
+                    i--;
+                    continue;
+                }
+
+                if (!TryResolvePrinter(fetch.PrinterObjectId, out Printer printer))
+                {
+                    _fetching.RemoveAt(i);
+                    i--;
+                    continue;
+                }
+
+                if (!Land(spec, printer, fetch.Team))
+                    continue;
+
+                _fetching.RemoveAt(i);
+                i--;
+            }
+        }
+
+        /// <summary>
+        /// Server: creates the document and files it into the machine's queue.
+        /// </summary>
+        /// <remarks>
+        /// The room is checked here rather than when the fetch started, because this is the moment
+        /// it has to be true and the moment the number is spent. A document created for a queue
+        /// that cannot take it would exist in the store, hold a number nothing else can ever use,
+        /// and be reachable by nothing — the number has no ceiling, so burning one is a permanent
+        /// change made for a request that was going to be refused anyway.
+        /// </remarks>
+        /// <returns>False when there is nowhere to put it yet.</returns>
+        private bool Land(DocumentCatalogue.Spec spec, Printer printer, int team)
+        {
+            ContainerBase queue = printer.Queue;
+            if (queue == null || queue.IsFull)
+                return false;
+
+            DocumentStore store = DocumentStore.Instance;
+            if (store == null)
+                return false;
+
+            int id = store.ServerCreate(spec.PayloadIndex, team, spec.Source);
+
+            /* Silent when it fails, like every other full container in the project. */
+            return queue.ServerTryAdd(ContainerEntry.ForData(id));
+        }
+
+        /// <summary>
+        /// Finds the machine a fetch was ordered for, or false when it is gone.
+        /// </summary>
+        /// <remarks>
+        /// Looked up by object id rather than held as a reference, because a replicated struct
+        /// cannot hold one. The lookup doubles as the check: a printer despawned while the fetch
+        /// was running is simply no longer in the collection.
+        /// </remarks>
+        private bool TryResolvePrinter(int objectId, out Printer printer)
+        {
+            printer = null;
+
+            NetworkManager manager = NetworkManager;
+            if (manager == null || !manager.IsServerStarted)
+                return false;
+
+            if (!manager.ServerManager.Objects.Spawned.TryGetValue(objectId, out NetworkObject nob))
+                return false;
+
+            if (nob == null)
+                return false;
+
+            printer = nob.GetComponent<Printer>();
+            return printer != null;
+        }
+
+        /// <summary>
+        /// Raises <see cref="FetchingChanged"/> exactly once per change on every peer.
+        /// </summary>
+        /// <remarks>
+        /// The same shape as <see cref="ContainerBase"/>'s contents callback and for the same
+        /// reason: a host receives every change twice — once as the server's own write and once as
+        /// the echoed client read — and letting both through rebuilds the panel twice per change,
+        /// which is visible as flicker.
+        /// </remarks>
+        private void OnFetchingChanged(SyncListOperation op, int index, DocumentFetch oldItem, DocumentFetch newItem, bool asServer)
+        {
+            if (asServer && IsClientStarted)
+                return;
+
+            FetchingChanged?.Invoke();
         }
     }
 }
