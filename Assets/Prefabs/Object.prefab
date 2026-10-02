@@ -13,6 +13,8 @@ GameObject:
   - component: {fileID: 6845914696672077302}
   - component: {fileID: 5388165419002859397}
   - component: {fileID: 5780900321277382376}
+  - component: {fileID: 8922996600386305370}
+  - component: {fileID: 7263825868078599189}
   m_Layer: 0
   m_Name: Object
   m_TagString: Untagged
@@ -191,6 +193,36 @@ MonoBehaviour:
   _captureDepth: 0.25
   _settleSpeed: 0.15
   _settleSeconds: 0.35
+--- !u!114 &8922996600386305370
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 560348858155662447}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 53c28ceb7900e0146b39c7b7e8326d17, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Overworked.Containers.ContainerBase
+  _componentIndexCache: 255
+  _addedNetworkObject: {fileID: 7022880221038656185}
+  _networkObjectCache: {fileID: 0}
+  _capacity: 0
+--- !u!114 &7263825868078599189
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 560348858155662447}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: e6db4119cdce9a2458fa8e12cea66c6d, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Overworked.Interaction.FolderIntake
+  _centre: {x: -0.02, y: 0.05, z: 0}
+  _halfExtents: {x: 0.28, y: 0.07, z: 0.42}
 --- !u!1 &7395801990154306975
 GameObject:
   m_ObjectHideFlags: 0

@@ -15,7 +15,13 @@ MonoBehaviour:
   _entries:
   - Payload: {fileID: 560348858155662447, guid: c4e56f8d978f72540a81836eadce088e, type: 3}
     Badge: {fileID: 560348858155662447, guid: 1f1b97143b4dd994e828c635a2afba22, type: 3}
+    IsContainer: 0
   - Payload: {fileID: 560348858155662447, guid: 8f1c6de8ecd2fc4408b42d1712086fb8, type: 3}
     Badge: {fileID: 560348858155662447, guid: b6dd42bbde1671a45b10573a099baa98, type: 3}
+    IsContainer: 0
   - Payload: {fileID: 560348858155662447, guid: bf67d54aa18477e489d53e305f063341, type: 3}
     Badge: {fileID: 0}
+    IsContainer: 0
+  - Payload: {fileID: 5926886556397169583, guid: 793c4662f41de7d4a866db348001660e, type: 3}
+    Badge: {fileID: 0}
+    IsContainer: 1
