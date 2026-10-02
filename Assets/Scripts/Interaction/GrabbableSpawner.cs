@@ -254,6 +254,39 @@ namespace Overworked.Interaction
         }
 
         /// <summary>
+        /// Copies every spawned grabbable that is loose in the world into a buffer.
+        /// </summary>
+        /// <remarks>
+        /// "Loose" is the set of checks every machine that takes things in has to make before it
+        /// looks at where an object is, and the set is the same for all of them:
+        ///
+        /// - **Still in someone's hands.** This is what stops a machine taking an object off a
+        ///   player who is merely walking past it, and it is why an intake box does not have to be
+        ///   small.
+        /// - **A scene object.** Those despawn to SetActive(false) with no way back. Nothing should
+        ///   be authoring grabbables into the scene, but the failure is silent and permanent.
+        /// - **Already gone, or half torn down.**
+        ///
+        /// Shared rather than written out per machine, because the second machine to write its own
+        /// copy is the one that forgets the first check — and the symptom of that is a document
+        /// disappearing out of a player's hands.
+        /// </remarks>
+        public static void CollectLooseGrabbables(NetworkManager manager, List<NetworkGrabbable> buffer)
+        {
+            CollectSpawnedGrabbables(manager, buffer);
+
+            for (int i = buffer.Count - 1; i >= 0; i--)
+            {
+                NetworkGrabbable grabbable = buffer[i];
+
+                if (grabbable == null || !grabbable.IsSpawned || grabbable.NetworkObject == null)
+                    buffer.RemoveAt(i);
+                else if (grabbable.NetworkObject.IsSceneObject || grabbable.State == GrabbableState.Held)
+                    buffer.RemoveAt(i);
+            }
+        }
+
+        /// <summary>
         /// Server: destroys every grabbable in the scene.
         /// </summary>
         /// <remarks>

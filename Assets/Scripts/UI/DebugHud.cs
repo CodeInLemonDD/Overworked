@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.Text;
 using FishNet.Object;
 using Overworked.Containers;
+using Overworked.Interaction;
 using Overworked.Player;
 using TMPro;
 using UnityEngine;
@@ -342,9 +343,21 @@ namespace Overworked.UI
              * in an order that has nothing to do with anything on screen. */
             _containers.Sort(CompareContainers);
 
-            builder.Append("容器 (").Append(_containers.Count).Append(')');
+            /* Every grabbable in the game carries a container: they are all made from the one
+             * object prefab, and only the folders have any use for it. Empty ones are left out —
+             * a sheet of paper going about its business is not a stock level anybody is asking
+             * about, and there is one of these per object in the world, which would bury the
+             * machines this list exists to report on. A folder with documents in it still shows. */
+            int shown = 0;
+            for (int i = 0; i < _containers.Count; i++)
+            {
+                if (_containers[i] != null && ShouldReport(_containers[i]))
+                    shown++;
+            }
 
-            if (_containers.Count == 0)
+            builder.Append("容器 (").Append(shown).Append(')');
+
+            if (shown == 0)
             {
                 builder.Append("\n  (无)");
                 return;
@@ -352,7 +365,7 @@ namespace Overworked.UI
 
             foreach (ContainerBase container in _containers)
             {
-                if (container == null)
+                if (container == null || !ShouldReport(container))
                     continue;
 
                 builder.Append("\n  ").Append(Label(container));
@@ -361,6 +374,23 @@ namespace Overworked.UI
                 builder.Append("  ");
                 AppendContents(builder, container);
             }
+        }
+
+        /// <summary>
+        /// True when a container is worth a line.
+        /// </summary>
+        /// <remarks>
+        /// A scene container always is: those are the machines, and an empty one is exactly what
+        /// somebody is looking for when they open this. A container on a spawned object is one
+        /// somebody is carrying, and an empty one of those is the object itself.
+        /// </remarks>
+        private static bool ShouldReport(ContainerBase container)
+        {
+            if (container.Count > 0)
+                return true;
+
+            NetworkObject nob = container.NetworkObject;
+            return nob == null || nob.IsSceneObject;
         }
 
         /// <summary>
@@ -520,9 +550,16 @@ namespace Overworked.UI
         /// Qualified by the parent, because a machine carries several containers — a printer has
         /// an input and an output — and they are named "Input" and "Output" on child objects.
         /// The parent is what tells them apart.
+        ///
+        /// A carried container has neither: it is made from the one object prefab, so it is called
+        /// "Object" and has no parent. What it actually is, is its payload.
         /// </remarks>
-        private static string Label(ContainerBase container)
+        private string Label(ContainerBase container)
         {
+            NetworkGrabbable grabbable = container.GetComponent<NetworkGrabbable>();
+            if (grabbable != null)
+                return PayloadName(grabbable.PayloadIndex);
+
             Transform parent = container.transform.parent;
 
             return parent != null ? $"{parent.name}/{container.name}" : container.name;
@@ -531,7 +568,7 @@ namespace Overworked.UI
         /// <summary>
         /// Orders containers by the label they print under.
         /// </summary>
-        private static int CompareContainers(ContainerBase left, ContainerBase right)
+        private int CompareContainers(ContainerBase left, ContainerBase right)
         {
             if (left == null)
                 return right == null ? 0 : 1;

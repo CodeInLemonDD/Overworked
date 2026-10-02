@@ -241,6 +241,17 @@ namespace Overworked.Interaction
         public int DataId => _dataId.Value;
 
         /// <summary>
+        /// True when this object is something documents can be put into.
+        /// </summary>
+        /// <remarks>
+        /// Read off the payload every time rather than cached in a field of its own. It is an
+        /// array lookup and a bool, and a cached copy would be one more thing that can be left
+        /// unset on a prefab or fail to follow a payload change — for a value that has no reason
+        /// to be stored twice.
+        /// </remarks>
+        public bool IsContainer => _catalogue != null && _catalogue.IsContainer(PayloadIndex);
+
+        /// <summary>
         /// Server-only: the cell this object was last placed on.
         /// </summary>
         public Vector2Int? PlacedCell => _placedCell;

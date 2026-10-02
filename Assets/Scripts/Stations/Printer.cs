@@ -504,36 +504,15 @@ namespace Overworked.Stations
         /// </summary>
         private void UpdateIntake()
         {
-            /* Snapshot first. Despawning while enumerating ServerManager.Objects.Spawned throws,
-             * because that collection is a live view over a Dictionary and Despawn removes the
-             * key synchronously. The buffer is our own list, so removing from the world while
-             * walking it is safe. */
-            GrabbableSpawner.CollectSpawnedGrabbables(NetworkManager, _scanBuffer);
+            /* Snapshot first, and only the loose ones. Despawning while enumerating
+             * ServerManager.Objects.Spawned throws, because that collection is a live view over a
+             * Dictionary and Despawn removes the key synchronously — and the checks that decide
+             * what counts as loose are the ones every intake in the game shares, so they live
+             * beside the snapshot rather than here. */
+            GrabbableSpawner.CollectLooseGrabbables(NetworkManager, _scanBuffer);
 
             for (int i = 0; i < _scanBuffer.Count; i++)
-            {
-                NetworkGrabbable grabbable = _scanBuffer[i];
-                if (grabbable == null || !grabbable.IsSpawned)
-                    continue;
-
-                NetworkObject nob = grabbable.NetworkObject;
-                if (nob == null)
-                    continue;
-
-                /* A scene object despawns to SetActive(false) with no way back. Nothing should
-                 * be authoring grabbables in the scene, but the failure is silent and
-                 * permanent, so it is worth one check. */
-                if (nob.IsSceneObject)
-                    continue;
-
-                /* Anything still in someone's hands is left where it is. This is the whole of
-                 * the rule that stops the machine taking a cartridge off a player who is merely
-                 * walking past it, and it is why the box does not have to be small. */
-                if (grabbable.State == GrabbableState.Held)
-                    continue;
-
-                TrySwallow(grabbable, grabbable.transform.position);
-            }
+                TrySwallow(_scanBuffer[i], _scanBuffer[i].transform.position);
 
             _scanBuffer.Clear();
         }

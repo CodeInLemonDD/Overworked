@@ -50,6 +50,25 @@ namespace Overworked.Containers
             /// </remarks>
             [Tooltip("Optional. The flattened logo shown on boxes that hand this payload out. Empty is fine.")]
             public GameObject Badge;
+
+            /// <summary>
+            /// True when this payload is something you can put documents into.
+            /// </summary>
+            /// <remarks>
+            /// A folder, and whatever follows it. The flag lives here rather than on the folder's
+            /// own component because the component is on the one object prefab every grabbable is
+            /// made from — so it cannot know what it is looking at, and the payload index it reads
+            /// at runtime is the only thing that can say.
+            ///
+            /// A fact about the payload, in the same way the badge is: what this index *is*,
+            /// rather than where an instance of it happens to be.
+            ///
+            /// Not a count. A container with no way to take anything back out has to be unlimited,
+            /// or a player can jam it with a legal action and never recover — see CONSTRAINTS.md.
+            /// Folders have no take-out verb, so this is a yes or a no.
+            /// </remarks>
+            [Tooltip("True when this payload can hold documents. Folders only, for now.")]
+            public bool IsContainer;
         }
 
         /// <summary>
@@ -102,6 +121,18 @@ namespace Overworked.Containers
             badge = GetBadge(index);
             return badge != null;
         }
+
+        /// <summary>
+        /// Returns true when an index is something documents can be put into.
+        /// </summary>
+        /// <remarks>
+        /// False covers both "no such index" and "this payload is not a container", deliberately.
+        /// The caller's answer to either is the same — leave the object alone — and separating
+        /// them would invite a caller to treat one as an error worth reporting. Same reasoning as
+        /// <see cref="GetBadge"/>.
+        /// </remarks>
+        public bool IsContainer(int index) =>
+            TryGetEntry(index, out Entry entry) && entry.IsContainer;
 
         /// <summary>
         /// Returns the whole entry for an index, or false when it is out of range.
