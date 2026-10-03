@@ -102,9 +102,39 @@ namespace Overworked.UI
         private const float HeaderHeight = 30f;
 
         /// <summary>
+        /// Height of the heading that names a source group.
+        /// </summary>
+        private const float GroupHeadingHeight = 28f;
+
+        /// <summary>
+        /// Extra space left under a group, so the next heading reads as a new group rather than as
+        /// one more row.
+        /// </summary>
+        private const float GroupGap = 12f;
+
+        /// <summary>
+        /// How far a group heading is indented from the column edge.
+        /// </summary>
+        private const float GroupIndent = 10f;
+
+        /// <summary>
+        /// How far a row is indented under its group heading.
+        /// </summary>
+        /// <remarks>
+        /// The indentation is the only thing saying the rows belong to the heading above them.
+        /// Without it the two groups are one undifferentiated list with two labels lost inside it.
+        /// </remarks>
+        private const float RowIndent = 26f;
+
+        /// <summary>
         /// Font size for body rows.
         /// </summary>
         private const float RowFontSize = 22f;
+
+        /// <summary>
+        /// Font size for a source group's heading.
+        /// </summary>
+        private const float GroupHeadingFontSize = 19f;
 
         /// <summary>
         /// Font size for headers and the title.
@@ -125,6 +155,21 @@ namespace Overworked.UI
         /// Background of the document that is chosen.
         /// </summary>
         private static readonly Color RowChosenColour = new(0.20f, 0.42f, 0.62f, 0.95f);
+
+        /// <summary>
+        /// Background of a row that cannot be pressed yet.
+        /// </summary>
+        /// <remarks>
+        /// A darker step of <see cref="RowColour"/> rather than a tint or a fade, and the text is
+        /// left alone: a locked document has to stay as readable as an open one. The point of
+        /// showing it at all is that the player learns there is something they have not found.
+        /// </remarks>
+        private static readonly Color RowLockedColour = new(0.11f, 0.12f, 0.145f, 0.95f);
+
+        /// <summary>
+        /// Colour of a source group's heading.
+        /// </summary>
+        private static readonly Color GroupHeadingColour = new(0.62f, 0.67f, 0.76f, 1f);
 
         /// <summary>
         /// Window background.
@@ -213,6 +258,18 @@ namespace Overworked.UI
         private Computer _computer;
 
         /// <summary>
+        /// The unlocks this panel is following, or null while closed — and null for good on a
+        /// scene that has none.
+        /// </summary>
+        /// <remarks>
+        /// Held rather than read back from <see cref="DocumentUnlocks.Instance"/> when unsubscribing,
+        /// for the same reason the computer is: the static can have been cleared by the time the
+        /// window closes, and a subscription that cannot be found again is one that stays attached
+        /// to a panel that no longer belongs to it.
+        /// </remarks>
+        private DocumentUnlocks _unlocks;
+
+        /// <summary>
         /// The movement component on the same player, cached so input can be handed back.
         /// </summary>
         private PlayerMovementPrediction _movement;
@@ -265,10 +322,16 @@ namespace Overworked.UI
             _interaction = interaction;
             _computer = computer;
 
-            /* Followed rather than sampled: a fetch landing while the window is open changes what
-             * the document column can offer, and a list that only redrew when the player happened
-             * to click something would keep offering a document that is already on its way. */
-            _computer.FetchingChanged += OnFetchingChanged;
+            /* Followed rather than sampled. Two things can change what the document column may
+             * offer while the window is open: a fetch starting or landing, and a kind being opened
+             * up. Both have to redraw it, and both go through the one handler — the work they need
+             * is identical, and a second copy of it would be a second place for the selection to be
+             * forgotten. */
+            _computer.FetchingChanged += OnOfferChanged;
+
+            _unlocks = DocumentUnlocks.Instance;
+            if (_unlocks != null)
+                _unlocks.UnlockedChanged += OnOfferChanged;
 
             /* Cached now rather than looked up when the panel closes: by then the player object may
              * be gone, and leaving input switched off on a player that is still alive is the worst
@@ -301,10 +364,13 @@ namespace Overworked.UI
 
             _open = false;
 
-            /* Before the reference is dropped, and unconditionally: a panel left subscribed to a
+            /* Before the references are dropped, and unconditionally: a panel left subscribed to a
              * machine it no longer belongs to would rebuild another window's rows. */
             if (_computer != null)
-                _computer.FetchingChanged -= OnFetchingChanged;
+                _computer.FetchingChanged -= OnOfferChanged;
+
+            if (_unlocks != null)
+                _unlocks.UnlockedChanged -= OnOfferChanged;
 
             _fetchStartedAt.Clear();
 
@@ -317,6 +383,7 @@ namespace Overworked.UI
 
             _interaction = null;
             _computer = null;
+            _unlocks = null;
             _movement = null;
             _stamina = null;
         }
@@ -472,13 +539,17 @@ namespace Overworked.UI
         }
 
         /// <summary>
-        /// Builds the document column.
+        /// Builds the document column, as one group per source.
         /// </summary>
         /// <remarks>
-        /// A row whose document is already on its way is drawn in place and made unclickable
-        /// rather than removed. A list that shortened itself under the player's cursor would move
-        /// whatever they were about to press, and ordering the same document twice is the mistake
-        /// that invites.
+        /// Rows that cannot be pressed — one already on its way, one that is still locked — are
+        /// drawn in place and made unclickable rather than removed. A list that shortened itself
+        /// under the player's cursor would move whatever they were about to press; and for a locked
+        /// kind, hiding it would hide the one thing the player is meant to learn from it.
+        ///
+        /// Whether a row can be pressed is not the same as whether it is lit: a row that is waiting
+        /// cannot be pressed but stays at full brightness, because it is working rather than
+        /// withheld. Only a locked one is drawn darker.
         /// </remarks>
         private void BuildDocumentRows(float x, float width, float firstRowY)
         {
@@ -492,32 +563,151 @@ namespace Overworked.UI
 
             PruneFetchClocks(catalogue);
 
+            /* The y is carried down through the groups rather than computed from a row number.
+             * Grouping is what breaks "the fourth row is the fourth spec", so nothing here may
+             * derive a spec from a position — which spec a row means travels on the row. */
+            float y = BuildSourceGroup(x, width, firstRowY, catalogue, DocumentSource.Filing);
+            BuildSourceGroup(x, width, y, catalogue, DocumentSource.Internet);
+        }
+
+        /// <summary>
+        /// Builds one source group: its heading, then its rows.
+        /// </summary>
+        /// <remarks>
+        /// A heading is drawn only when the group has something under it; a heading with nothing
+        /// following would be a promise the catalogue does not keep.
+        /// </remarks>
+        /// <returns>The y the next group starts at.</returns>
+        private float BuildSourceGroup(
+            float x,
+            float width,
+            float y,
+            DocumentCatalogue catalogue,
+            DocumentSource source)
+        {
+            if (!HasSpecInGroup(catalogue, source))
+                return y;
+
+            AddGroupHeading(x + GroupIndent, y, width - GroupIndent, GroupName(source));
+            y += GroupHeadingHeight + RowGap;
+
             for (int i = 0; i < catalogue.Count; i++)
             {
-                if (!catalogue.TryGet(i, out DocumentCatalogue.Spec spec))
+                if (!catalogue.TryGet(i, out DocumentCatalogue.Spec spec) || !InGroup(spec, source))
                     continue;
 
-                int index = i;
-                bool fetching = _computer.IsFetching(i);
-
-                Button row = AddRow(
-                    x,
-                    firstRowY + i * (RowHeight + RowGap),
-                    width,
-                    fetching
-                        ? FetchLabel(i, BeginTracking(i))
-                        : $"{spec.DisplayName}   [{SourceName(spec.Source)}]",
-                    fetching ? null : () => Choose(index));
-
-                _documentRows.Add(new SpecRow
-                {
-                    Button = row,
-                    Background = row.GetComponent<Image>(),
-                    Label = row.GetComponentInChildren<TextMeshProUGUI>(),
-                    SpecIndex = i,
-                    Selectable = !fetching,
-                });
+                AddSpecRow(x + RowIndent, y, width - RowIndent, i, spec);
+                y += RowHeight + RowGap;
             }
+
+            return y + GroupGap;
+        }
+
+        /// <summary>
+        /// Builds one row of the document column.
+        /// </summary>
+        /// <remarks>
+        /// Nothing is derived from the row's position. The catalogue index travels with the row, in
+        /// <see cref="SpecRow.SpecIndex"/>, because grouping means the two no longer agree.
+        /// </remarks>
+        private void AddSpecRow(float x, float y, float width, int specIndex, DocumentCatalogue.Spec spec)
+        {
+            bool fetching = _computer.IsFetching(specIndex);
+            bool selectable = IsUnlocked(specIndex) && !fetching;
+
+            /* Waiting beats locked when both are true at once, which a reset can do to a fetch
+             * already in flight. The document is on its way, and the countdown is the only sign of
+             * it there is — so that is the more useful of the two things the row could say. */
+            string label = fetching
+                ? FetchLabel(specIndex, BeginTracking(specIndex))
+                : selectable
+                    ? spec.DisplayName
+                    : $"{spec.DisplayName}   锁定";
+
+            Button row = AddRow(
+                x,
+                y,
+                width,
+                label,
+                selectable ? () => Choose(specIndex) : null,
+                selectable || fetching ? RowColour : RowLockedColour);
+
+            _documentRows.Add(new SpecRow
+            {
+                Button = row,
+                Background = row.GetComponent<Image>(),
+                Label = row.GetComponentInChildren<TextMeshProUGUI>(),
+                SpecIndex = specIndex,
+                Selectable = selectable,
+            });
+        }
+
+        /// <summary>
+        /// Adds the heading that names a source group.
+        /// </summary>
+        private void AddGroupHeading(float x, float y, float width, string text)
+        {
+            GameObject headingObject = new("Group", typeof(RectTransform));
+            headingObject.transform.SetParent(_panelRect, worldPositionStays: false);
+
+            /* Registered for the next rebuild, unlike the labels AddLabel makes: a group heading is
+             * a row of the list and goes with the rest of them. */
+            _rows.Add(headingObject);
+
+            RectTransform rect = (RectTransform)headingObject.transform;
+            rect.anchorMin = new Vector2(0f, 1f);
+            rect.anchorMax = new Vector2(0f, 1f);
+            rect.pivot = new Vector2(0f, 1f);
+            rect.anchoredPosition = new Vector2(x, -y);
+            rect.sizeDelta = new Vector2(width, GroupHeadingHeight);
+
+            TextMeshProUGUI label = headingObject.AddComponent<TextMeshProUGUI>();
+            ApplyText(label, text, GroupHeadingFontSize, TextAlignmentOptions.MidlineLeft);
+
+            /* Dimmer than a row, and smaller, so it reads as a caption for what follows rather than
+             * as one more thing that could be pressed. */
+            label.color = GroupHeadingColour;
+        }
+
+        /// <summary>
+        /// Whether a kind may be asked for.
+        /// </summary>
+        /// <remarks>
+        /// A missing component means nothing is locked, which is what the server does with the same
+        /// answer: a scene that predates unlocks offers everything rather than nothing. The two
+        /// failures are not symmetric, and the cheap one is the one to prefer.
+        /// </remarks>
+        private static bool IsUnlocked(int specIndex)
+        {
+            DocumentUnlocks unlocks = DocumentUnlocks.Instance;
+            return unlocks == null || unlocks.IsUnlocked(specIndex);
+        }
+
+        /// <summary>
+        /// Whether a spec belongs in a group.
+        /// </summary>
+        /// <remarks>
+        /// Anything that is not Internet is filed, rather than only the value that means filing.
+        /// A source the catalogue does not define is a data-entry mistake, and the one outcome that
+        /// must not come of it is a spec appearing in no group at all — the panel would silently
+        /// drop a document, which is exactly what a hand-written grouping invites.
+        /// </remarks>
+        private static bool InGroup(DocumentCatalogue.Spec spec, DocumentSource source) =>
+            ((DocumentSource)spec.Source == DocumentSource.Internet)
+            == (source == DocumentSource.Internet);
+
+        /// <summary>
+        /// Whether a group has anything under it.
+        /// </summary>
+        private static bool HasSpecInGroup(DocumentCatalogue catalogue, DocumentSource source)
+        {
+            for (int i = 0; i < catalogue.Count; i++)
+            {
+                if (catalogue.TryGet(i, out DocumentCatalogue.Spec spec) && InGroup(spec, source))
+                    return true;
+            }
+
+            return false;
         }
 
         /// <summary>
@@ -617,15 +807,21 @@ namespace Overworked.UI
         }
 
         /// <summary>
-        /// Client: a fetch started or landed, so the document column has changed.
+        /// Client: something changed what the document column may offer, so it is rebuilt.
         /// </summary>
         /// <remarks>
+        /// Two events land here and they want the same work: a fetch starting or landing, and a
+        /// kind being opened up. Neither is frequent and both are the same kind of news, so there
+        /// is one handler rather than two that would have to be kept agreeing.
+        ///
         /// The selection is re-applied rather than left to survive, because rebuilding the rows
         /// throws the highlight away with them. Asking for it again also drops a selection that has
-        /// stopped being legal — which is the row that has just started waiting — so the lit row
-        /// and the row a printer press would send are always the same one.
+        /// stopped being legal — the row that has just started waiting, or one that has been
+        /// re-locked by a reset — so the lit row and the row a printer press would send are always
+        /// the same one. That is the bug this line exists for; without it the panel redraws with
+        /// nothing lit, and the next printer press does nothing at all.
         /// </remarks>
-        private void OnFetchingChanged()
+        private void OnOfferChanged()
         {
             if (!_open)
                 return;
@@ -679,7 +875,21 @@ namespace Overworked.UI
         /// <summary>
         /// Adds one list row, optionally clickable.
         /// </summary>
-        private Button AddRow(float x, float y, float width, string label, System.Action onClick)
+        /// <param name="onClick">
+        /// What pressing it does, or null when the row cannot be pressed — a message, or a document
+        /// that is not on offer.
+        /// </param>
+        /// <param name="background">
+        /// Background colour, or null for the ordinary one. Used to draw a row that is withheld
+        /// darker than the rest without making it unreadable.
+        /// </param>
+        private Button AddRow(
+            float x,
+            float y,
+            float width,
+            string label,
+            System.Action onClick,
+            Color? background = null)
         {
             Button button = CreateButton("Row", x, y, width, RowHeight, label, RowFontSize, onClick);
 
@@ -687,11 +897,14 @@ namespace Overworked.UI
              * the window's permanent parts, which share that method, are not swept up with them. */
             _rows.Add(button.gameObject);
 
+            Image image = button.GetComponent<Image>();
+            image.color = background ?? RowColour;
+
             if (onClick == null)
             {
-                /* A row that is only a message. Its background would still swallow clicks that
+                /* A row that cannot be pressed. Its background would still swallow clicks that
                  * should reach nothing, so it is not a raycast target at all. */
-                button.GetComponent<Image>().raycastTarget = false;
+                image.raycastTarget = false;
                 button.interactable = false;
             }
 
@@ -951,10 +1164,15 @@ namespace Overworked.UI
         // ------------------------------------------------------------------ helpers
 
         /// <summary>
-        /// A readable name for where a document comes from.
+        /// What a source group is called.
         /// </summary>
-        private static string SourceName(int source) =>
-            (DocumentSource)source == DocumentSource.Internet ? "Internet" : "后台";
+        /// <remarks>
+        /// The source is named once per group rather than repeated on every row. With the rows
+        /// sitting under a heading that already says where they come from, a suffix on each of them
+        /// would be the same word twice in a column two rows tall.
+        /// </remarks>
+        private static string GroupName(DocumentSource source) =>
+            source == DocumentSource.Internet ? "Internet" : "后台文件";
 
         /// <summary>
         /// Orders printers by the name they are listed under.

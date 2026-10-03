@@ -262,6 +262,19 @@ namespace Overworked.Stations
             if (_catalogue == null || !_catalogue.TryGet(specIndex, out DocumentCatalogue.Spec spec))
                 return false;
 
+            /* A locked kind is refused here, and not only greyed on the panel. The panel belongs to
+             * the client, and a modified one can send a spec index straight past it — so the list
+             * of what a round has opened is checked where the document would be made, which is the
+             * only place the answer cannot be argued with.
+             *
+             * A null component means "nothing is locked", deliberately: a scene that predates this
+             * feature has no unlocks object, and it should behave exactly as it did before rather
+             * than have every machine refuse everything. See DocumentUnlocks for why the two
+             * failures are not symmetric. */
+            DocumentUnlocks unlocks = DocumentUnlocks.Instance;
+            if (unlocks != null && !unlocks.IsUnlocked(specIndex))
+                return false;
+
             NetworkObject printerObject = printer.NetworkObject;
             if (printerObject == null)
                 return false;
