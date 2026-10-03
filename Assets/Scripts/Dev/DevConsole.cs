@@ -154,7 +154,7 @@ namespace Overworked.Dev
         /// Every first word the console knows.
         /// </summary>
         private static readonly string[] Verbs =
-            { "spawn", "clear", "give", "tp", "pos", "document", "docs", "queue", "printers", "help" };
+            { "spawn", "clear", "give", "tp", "pos", "document", "docs", "queue", "printers", "unlock", "unlocks", "help" };
 
 #if UNITY_EDITOR
         /// <summary>
@@ -380,6 +380,14 @@ namespace Overworked.Dev
                     ListPrinters();
                     return;
 
+                case "unlock":
+                    Unlock(parts);
+                    return;
+
+                case "unlocks":
+                    ListUnlocks();
+                    return;
+
                 default:
                     Log($"unknown command '{verb}'. Try 'help'.");
                     return;
@@ -400,6 +408,9 @@ namespace Overworked.Dev
             Log("docs                                     list the documents that exist");
             Log("queue <printer> <document>               put a document in a machine's job queue");
             Log("printers                                 list the printers and their queues");
+            Log("unlock <spec>                            open a document kind for this round");
+            Log("unlock reset                             close everything but the starting set");
+            Log("unlocks                                  list every kind and whether it is open");
             Log("help                                     this");
             Log("Coordinates are grid cells; objects land on the cell centre.");
         }
@@ -908,6 +919,163 @@ namespace Overworked.Dev
         }
 
         /// <summary>
+        /// <c>unlock &lt;spec&gt;</c> and <c>unlock reset</c>
+        /// </summary>
+        /// <remarks>
+        /// The only way to open a kind of document this round. Unlocking is meant to be something
+        /// a player earns from an NPC, and there are no NPCs yet, so the call they will eventually
+        /// make is reachable from here — which is what lets the panel and the data layer be
+        /// finished and tested before anything exists to hand a document over.
+        ///
+        /// Deliberately not folded into <c>document</c>. That command produces a document whatever
+        /// the locks say, because what it stands in for is "somebody already has this"; a console
+        /// that could not make a locked document could not set up the state the lock is about. The
+        /// lock is checked where it matters — in the server's fetch path and on the panel — and
+        /// those are what the acceptance run exercises.
+        ///
+        /// Server only. The list is replicated state, and a client that could append to it would
+        /// be opening kinds for everyone.
+        /// </remarks>
+        private void Unlock(string[] parts)
+        {
+            if (!RequireServer())
+                return;
+
+            DocumentUnlocks unlocks = DocumentUnlocks.Instance;
+            if (unlocks == null)
+            {
+                Log("no DocumentUnlocks in the scene, so there is nothing to open.");
+                return;
+            }
+
+            DocumentCatalogue catalogue = Catalogue;
+            if (catalogue == null)
+            {
+                Log("no document catalogue assigned or found.");
+                return;
+            }
+
+            if (parts.Length < 2)
+            {
+                Log("usage: unlock <spec>, or 'unlock reset'");
+                LogSpecs(catalogue);
+                return;
+            }
+
+            if (parts[1].ToLowerInvariant() == "reset")
+            {
+                unlocks.ServerResetUnlocks();
+                Log($"reset; {unlocks.UnlockedCount} of {catalogue.Count} open.");
+                return;
+            }
+
+            if (!TryParse(parts[1], "spec", out int spec))
+                return;
+
+            if (!catalogue.TryGet(spec, out DocumentCatalogue.Spec entry))
+            {
+                Log($"no document spec {spec}.");
+                LogSpecs(catalogue);
+                return;
+            }
+
+            /* Asked before opening rather than after, purely so the two ways this can decline can
+             * be told apart in the answer. ServerUnlock reports both as false, which is the right
+             * answer for a caller that only wants to know whether the document is available now. */
+            if (unlocks.IsUnlocked(spec))
+            {
+                Log($"spec {spec} '{entry.DisplayName}' is already open.");
+                return;
+            }
+
+            if (!unlocks.ServerUnlock(spec))
+            {
+                /* Reached only when this console can see the spec and the component says it is
+                 * not open — so the component is reading a different catalogue, or none. It says
+                 * so rather than reporting a refusal, because "refused" would send whoever reads
+                 * it looking for a rule instead of a reference. */
+                Log($"spec {spec} '{entry.DisplayName}' could not be opened; " +
+                    "check that DocumentUnlocks has the same catalogue assigned.");
+                return;
+            }
+
+            Log($"unlocked spec {spec} '{entry.DisplayName}'; " +
+                $"{Ordinal(unlocks, spec)} of {unlocks.UnlockedCount} open.");
+        }
+
+        /// <summary>
+        /// <c>unlocks</c>
+        /// </summary>
+        /// <remarks>
+        /// Every kind the catalogue offers and whether the round has opened it — locked ones
+        /// included, which is the whole point. A list showing only what can be obtained would look
+        /// exactly like the same list from before this feature existed.
+        ///
+        /// Reads and changes nothing, so like <c>docs</c> and <c>printers</c> it is not a server
+        /// command: a client being told a different set from the server is worth being able to ask
+        /// about from the client.
+        /// </remarks>
+        private void ListUnlocks()
+        {
+            DocumentCatalogue catalogue = Catalogue;
+            if (catalogue == null)
+            {
+                Log("no document catalogue assigned or found.");
+                return;
+            }
+
+            DocumentUnlocks unlocks = DocumentUnlocks.Instance;
+
+            /* Said before the list rather than instead of it. With no component every row below
+             * reads as open, and that is otherwise indistinguishable from a catalogue where every
+             * kind was seeded open — which is a wiring mistake worth being able to see. */
+            if (unlocks == null)
+                Log("no DocumentUnlocks in the scene; nothing is locked.");
+
+            for (int i = 0; i < catalogue.Count; i++)
+            {
+                if (!catalogue.TryGet(i, out DocumentCatalogue.Spec spec))
+                    continue;
+
+                bool open = unlocks == null || unlocks.IsUnlocked(i);
+
+                /* Whether it starts open is on every row on purpose: it is what tells a kind that
+                 * was seeded apart from one somebody opened by hand, and that is the difference
+                 * acceptance steps 1 and 9 are looking at. */
+                Log($"{Mark(open)} {i}  {spec.DisplayName}  {(DocumentSource)spec.Source}" +
+                    (spec.UnlockedAtStart ? "  starts open" : string.Empty));
+            }
+
+            Log($"{(unlocks != null ? unlocks.UnlockedCount : catalogue.Count)} of {catalogue.Count} open.");
+        }
+
+        /// <summary>
+        /// The tick and dot the unlock list is drawn with.
+        /// </summary>
+        /// <remarks>
+        /// A middle dot and a check mark rather than box drawing or an emoji: the dot is Latin-1
+        /// and the tick is one of the oldest dingbats, so these are the two a status column has
+        /// the best chance of getting from whatever font it ends up rendered in. A glyph the font
+        /// does not have comes out as a box, and a status column that reads differently on every
+        /// machine is worse than one with no marks at all.
+        /// </remarks>
+        private static string Mark(bool open) => open ? "✓" : "·";
+
+        /// <summary>
+        /// Where a kind sits in the unlocked list, counting from one; zero when it is not there.
+        /// </summary>
+        private static int Ordinal(DocumentUnlocks unlocks, int specIndex)
+        {
+            for (int i = 0; i < unlocks.UnlockedCount; i++)
+            {
+                if (unlocks.TryGetUnlocked(i, out int unlocked) && unlocked == specIndex)
+                    return i + 1;
+            }
+
+            return 0;
+        }
+
+        /// <summary>
         /// Lists the specs and what they resolve to, for a usage line or an unknown spec.
         /// </summary>
         private void LogSpecs(DocumentCatalogue catalogue)
@@ -1111,6 +1279,23 @@ namespace Overworked.Dev
                 {
                     for (int id = 0; id < store.Count; id++)
                         result.Add(id.ToString());
+                }
+
+                return result;
+            }
+
+            if (verb == "unlock" && position == 1)
+            {
+                result.Add("reset");
+
+                /* Every spec, including the open ones. Completing only what could still be opened
+                 * would make the list shrink as the round goes on, and the one thing this command
+                 * has to be able to answer is whether a given kind is already open. */
+                DocumentCatalogue catalogue = Catalogue;
+                if (catalogue != null)
+                {
+                    for (int i = 0; i < catalogue.Count; i++)
+                        result.Add(i.ToString());
                 }
 
                 return result;
