@@ -240,6 +240,17 @@ namespace Overworked.UI
             public TextMeshProUGUI Label;
             public int SpecIndex;
             public bool Selectable;
+
+            /// <summary>
+            /// What the background goes back to when this row is not the chosen one.
+            /// </summary>
+            /// <remarks>
+            /// Carried on the row rather than recomputed, because <see cref="Choose"/> repaints
+            /// every row in the column and only the row knows which of the two ordinary colours it
+            /// is entitled to. Without it, the first click anywhere lights up every row that is
+            /// not on offer — and the one thing a locked row has to look like is locked.
+            /// </remarks>
+            public Color BaseColour;
         }
 
         /// <summary>
@@ -624,13 +635,15 @@ namespace Overworked.UI
                     ? spec.DisplayName
                     : $"{spec.DisplayName}   锁定";
 
+            Color baseColour = selectable || fetching ? RowColour : RowLockedColour;
+
             Button row = AddRow(
                 x,
                 y,
                 width,
                 label,
                 selectable ? () => Choose(specIndex) : null,
-                selectable || fetching ? RowColour : RowLockedColour);
+                baseColour);
 
             _documentRows.Add(new SpecRow
             {
@@ -639,6 +652,7 @@ namespace Overworked.UI
                 Label = row.GetComponentInChildren<TextMeshProUGUI>(),
                 SpecIndex = specIndex,
                 Selectable = selectable,
+                BaseColour = baseColour,
             });
         }
 
@@ -1043,7 +1057,7 @@ namespace Overworked.UI
                 if (chosen)
                     _chosenSpec = index;
 
-                row.Background.color = chosen ? RowChosenColour : RowColour;
+                row.Background.color = chosen ? RowChosenColour : row.BaseColour;
             }
         }
 
@@ -1122,9 +1136,10 @@ namespace Overworked.UI
 
                 /* Back to the unlit colour, the same as any other row that is waiting: the
                  * highlight means "this is what a press would send", and a press can no longer
-                 * send it. */
+                 * send it. Read off the row rather than named here, so a waiting row and a locked
+                 * one cannot end up disagreeing about what "unlit" means. */
                 if (row.Background != null)
-                    row.Background.color = RowColour;
+                    row.Background.color = row.BaseColour;
 
                 if (row.Button != null)
                     row.Button.interactable = false;
