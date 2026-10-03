@@ -608,10 +608,18 @@ namespace Overworked.UI
             if (store == null || !store.TryGet(documentId, out DocumentRecord record))
                 return $"文档 {documentId}";
 
-            if (store.TryGetSpec(documentId, out DocumentCatalogue.Spec spec))
-                return $"{spec.DisplayName} {record.Number}";
+            string name = store.TryGetSpec(documentId, out DocumentCatalogue.Spec spec)
+                ? $"{spec.DisplayName} {record.Number}"
+                : $"种类 {record.SpecIndex} #{record.Number}";
 
-            return $"种类 {record.SpecIndex} #{record.Number}";
+            /* Which side it belongs to, because both teams have an Excel 1 and a queue can be
+             * holding both — they would otherwise print as the same name twice, and a readout that
+             * cannot tell apart what it is listing has failed at its one job.
+             *
+             * The number as-is rather than a letter, matching what the console's 'docs' prints.
+             * A letter would be a second copy of the panel's mapping, in a file that has no
+             * business knowing what the round calls its teams. */
+            return $"{name} team {record.Team}";
         }
 
         /// <summary>
