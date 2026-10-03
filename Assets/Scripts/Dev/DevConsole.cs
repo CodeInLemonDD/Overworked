@@ -154,7 +154,7 @@ namespace Overworked.Dev
         /// Every first word the console knows.
         /// </summary>
         private static readonly string[] Verbs =
-            { "spawn", "clear", "give", "tp", "pos", "document", "docs", "queue", "printers", "unlock", "unlocks", "help" };
+            { "spawn", "clear", "give", "tp", "pos", "team", "document", "docs", "queue", "printers", "unlock", "unlocks", "help" };
 
 #if UNITY_EDITOR
         /// <summary>
@@ -388,6 +388,10 @@ namespace Overworked.Dev
                     ListUnlocks();
                     return;
 
+                case "team":
+                    SetTeam(parts);
+                    return;
+
                 default:
                     Log($"unknown command '{verb}'. Try 'help'.");
                     return;
@@ -404,6 +408,7 @@ namespace Overworked.Dev
             Log("give <payload> [number] [team]           put one into the local player's hands");
             Log("tp <x> <y>                               move the local player to a cell");
             Log("pos                                      print the local player's cell");
+            Log("team <n>                                 put the local player on a team (test seam)");
             Log("document <spec> [team]                   name a document; prints its id");
             Log("docs                                     list the round's documents and their ids");
             Log("queue <printer> <document>               put a document in a machine's job queue");
@@ -715,6 +720,53 @@ namespace Overworked.Dev
             Vector3 p = player.transform.position;
             Vector2Int cell = WorldGrid.CellCoord(new Vector2(p.x, p.z));
             Log($"local player at cell ({cell.x}, {cell.y}); world ({p.x:0.##}, {p.z:0.##}).");
+        }
+
+        /// <summary>
+        /// <c>team &lt;n&gt;</c>
+        /// </summary>
+        /// <remarks>
+        /// Moves the local player onto a team, and is the only way to do it: nothing in the game
+        /// assigns teams yet. Without it every player is on team A, and the two things this round
+        /// added cannot be exercised at all — a document's number counting per team, and the other
+        /// team's being refused.
+        ///
+        /// It sets the team on this peer's own player, which on a listen server is the host's; a
+        /// client is refused before it gets that far anyway. **A test seam, not match making** —
+        /// the round that assigns teams properly will have more to decide than this one line.
+        /// </remarks>
+        private void SetTeam(string[] parts)
+        {
+            if (!RequireServer())
+                return;
+            if (parts.Length < 2)
+            {
+                Log("usage: team <n>");
+                return;
+            }
+            if (!TryParse(parts[1], "team", out int team))
+                return;
+
+            NetworkObject player = FindLocalPlayer();
+            if (player == null)
+            {
+                Log("no local player to put on a team.");
+                return;
+            }
+
+            PlayerInteraction interaction = player.GetComponent<PlayerInteraction>();
+            if (interaction == null)
+            {
+                Log("the local player has no PlayerInteraction.");
+                return;
+            }
+
+            interaction.ServerSetTeam(team);
+
+            /* Says which command to reach for next, because the team does not travel on its own:
+             * the panel filters on it, and 'document' takes one as an argument rather than
+             * reading it. */
+            Log($"team {team}. The panel filters on this; pass it to 'document' to name one for this side.");
         }
 
         /// <summary>

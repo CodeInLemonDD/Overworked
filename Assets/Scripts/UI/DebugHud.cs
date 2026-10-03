@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.Text;
 using FishNet.Object;
 using Overworked.Containers;
+using Overworked.Documents;
 using Overworked.Interaction;
 using Overworked.Player;
 using TMPro;
@@ -149,6 +150,17 @@ namespace Overworked.UI
         /// order they print in: a row that reshuffles itself every refresh is unreadable.
         /// </remarks>
         private readonly List<KeyValuePair<int, int>> _tally = new();
+
+        /// <summary>
+        /// Reused tally of document ids within one container.
+        /// </summary>
+        /// <remarks>
+        /// Separate from <see cref="_tally"/> because the key means something else: there it is a
+        /// payload index, here it is a document. Two documents of one kind are two documents, so
+        /// counting them into one bucket would be the same as not naming them. The same
+        /// list-of-pairs shape, for the same reason — first seen, first printed.
+        /// </remarks>
+        private readonly List<KeyValuePair<int, int>> _documentTally = new();
 
         /// <summary>
         /// When the readout is next rebuilt.
@@ -406,8 +418,7 @@ namespace Overworked.UI
             }
 
             _tally.Clear();
-
-            int dataCount = 0;
+            _documentTally.Clear();
 
             for (int i = 0; i < count; i++)
             {
@@ -421,7 +432,7 @@ namespace Overworked.UI
                         break;
 
                     case ContainerEntryKind.Data:
-                        dataCount++;
+                        Tally(_documentTally, entry.DataId);
                         break;
                 }
             }
@@ -437,13 +448,16 @@ namespace Overworked.UI
                 builder.Append(PayloadName(entry.Key)).Append(" x").Append(entry.Value);
             }
 
-            if (dataCount > 0)
+            /* One name per document, not one count per kind. "Excel 1" and "Excel 2" are
+             * different documents, and a request names one of them: a readout that collapses
+             * both into "x2" cannot answer the question it is being read to answer. */
+            foreach (KeyValuePair<int, int> entry in _documentTally)
             {
                 if (!first)
                     builder.Append(", ");
                 first = false;
 
-                builder.Append("数据 x").Append(dataCount);
+                builder.Append(DocumentName(entry.Key)).Append(" x").Append(entry.Value);
             }
 
             /* Entries were held but none of them were an entity or a document — a kind this
@@ -576,6 +590,28 @@ namespace Overworked.UI
                 return -1;
 
             return string.CompareOrdinal(Label(left), Label(right));
+        }
+
+        /// <summary>
+        /// A document's identity: which kind it is, and which number.
+        /// </summary>
+        /// <remarks>
+        /// Two fallbacks rather than one, because there are two ways to be told less than the
+        /// whole story. A document whose kind has been removed from the catalogue still has a
+        /// number and a kind index; a store that has not replicated yet has neither, and the id
+        /// is all there is. Neither is a reason to leave the entry out — a readout that says a
+        /// container holds less than it does is worse than one with an ugly label.
+        /// </remarks>
+        private static string DocumentName(int documentId)
+        {
+            DocumentStore store = DocumentStore.Instance;
+            if (store == null || !store.TryGet(documentId, out DocumentRecord record))
+                return $"文档 {documentId}";
+
+            if (store.TryGetSpec(documentId, out DocumentCatalogue.Spec spec))
+                return $"{spec.DisplayName} {record.Number}";
+
+            return $"种类 {record.SpecIndex} #{record.Number}";
         }
 
         /// <summary>

@@ -556,9 +556,9 @@ namespace Overworked.Stations
             if (slot == null || slot.IsFull)
                 return;
 
-            /* OwnerClientId stays at -1 on purpose. Stock is public: paper and ink belong to
-             * nobody, and the faction rotation that used to run here belongs to the file queue
-             * instead, where each document will carry the faction that ordered it. */
+            /* Stock is a shared pool: paper and ink belong to nobody, and who fed them in
+             * changes nothing. Which side asked for a print belongs to the document in the job
+             * queue, not to the material. */
             if (!slot.ServerTryAdd(ContainerEntry.ForEntity(payload)))
                 return;
 
