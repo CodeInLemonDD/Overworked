@@ -102,29 +102,49 @@ namespace Overworked.UI
         private const float HeaderHeight = 30f;
 
         /// <summary>
-        /// Height of the heading that names a source group.
+        /// Height of the row that names a kind.
         /// </summary>
-        private const float GroupHeadingHeight = 28f;
+        private const float KindRowHeight = 30f;
 
         /// <summary>
-        /// Extra space left under a group, so the next heading reads as a new group rather than as
-        /// one more row.
+        /// Extra space left under a kind's documents, so the next kind reads as a new group rather
+        /// than as one more row.
         /// </summary>
-        private const float GroupGap = 12f;
+        private const float KindGap = 12f;
 
         /// <summary>
-        /// How far a group heading is indented from the column edge.
+        /// How far a kind row is indented from the column edge.
         /// </summary>
-        private const float GroupIndent = 10f;
+        private const float KindIndent = 8f;
 
         /// <summary>
-        /// How far a row is indented under its group heading.
+        /// How far a document row is indented under its kind.
         /// </summary>
         /// <remarks>
-        /// The indentation is the only thing saying the rows belong to the heading above them.
-        /// Without it the two groups are one undifferentiated list with two labels lost inside it.
+        /// The indentation is the only thing saying a document belongs to the kind above it.
+        /// Without it the two levels are one flat list with captions lost inside it, and the
+        /// difference between "Excel" and "Excel 1" stops being visible at all.
         /// </remarks>
-        private const float RowIndent = 26f;
+        private const float RowIndent = 34f;
+
+        /// <summary>
+        /// Left inset for the text of any row, kind or document.
+        /// </summary>
+        private const float LabelInset = 14f;
+
+        /// <summary>
+        /// Right inset for the tag that ends a row.
+        /// </summary>
+        private const float TagInset = 12f;
+
+        /// <summary>
+        /// Width reserved at the end of a row for that tag.
+        /// </summary>
+        /// <remarks>
+        /// Fixed rather than measured from the text. Both the name and the tag are laid out against
+        /// it, so a long kind name ellipsizes instead of pushing the tag off the row.
+        /// </remarks>
+        private const float TagWidth = 46f;
 
         /// <summary>
         /// Font size for body rows.
@@ -132,9 +152,9 @@ namespace Overworked.UI
         private const float RowFontSize = 22f;
 
         /// <summary>
-        /// Font size for a source group's heading.
+        /// Font size for the row that names a kind.
         /// </summary>
-        private const float GroupHeadingFontSize = 19f;
+        private const float KindFontSize = 20f;
 
         /// <summary>
         /// Font size for headers and the title.
@@ -167,9 +187,9 @@ namespace Overworked.UI
         private static readonly Color RowLockedColour = new(0.11f, 0.12f, 0.145f, 0.95f);
 
         /// <summary>
-        /// Colour of a source group's heading.
+        /// Colour of the row that names a kind.
         /// </summary>
-        private static readonly Color GroupHeadingColour = new(0.62f, 0.67f, 0.76f, 1f);
+        private static readonly Color KindColour = new(0.62f, 0.67f, 0.76f, 1f);
 
         /// <summary>
         /// Window background.
@@ -223,6 +243,17 @@ namespace Overworked.UI
         /// Scratch list for <see cref="PruneFetchClocks"/>, reused so a rebuild allocates nothing.
         /// </summary>
         private readonly List<int> _pruneBuffer = new();
+
+        /// <summary>
+        /// The document ids, in the order the column lists them.
+        /// </summary>
+        /// <remarks>
+        /// Sorted once per rebuild rather than walked in store order, because the store is in the
+        /// order documents were named and the column is in the order kinds are catalogued. Sizing
+        /// this by hand at a few dozen entries is not worth a second structure; the sort is what
+        /// turns "which kind comes first" into a question the ids already answer.
+        /// </remarks>
+        private readonly List<int> _documentOrder = new();
 
         /// <summary>
         /// One row of the document column.
@@ -569,18 +600,23 @@ namespace Overworked.UI
         }
 
         /// <summary>
-        /// Builds the document column, as one group per source.
+        /// Builds the document column: a row per kind, and the documents of that kind under it.
         /// </summary>
         /// <remarks>
-        /// Rows that cannot be pressed — one already on its way, one that is still locked — are
-        /// drawn in place and made unclickable rather than removed. A list that shortened itself
-        /// under the player's cursor would move whatever they were about to press; and for a
-        /// document this team has not been handed, hiding it would hide the one thing the player is
-        /// meant to learn from it.
+        /// A kind is listed only when something exists under it. A round names documents, not
+        /// kinds, and the catalogue is a list of what *could* be asked for rather than of what has
+        /// been — so a kind with nothing under it is a caption over nothing, and there would be one
+        /// for every entry in the asset.
+        ///
+        /// Rows that cannot be pressed — the other side's, one this side has not been handed, one
+        /// already on its way — are drawn in place and made unclickable rather than removed. A list
+        /// that shortened itself under the player's cursor would move whatever they were about to
+        /// press; and hiding a document they have not earned would hide the one thing the round
+        /// wants them to see, which is that it exists.
         ///
         /// Whether a row can be pressed is not the same as whether it is lit: a row that is waiting
         /// cannot be pressed but stays at full brightness, because it is working rather than
-        /// withheld. Only a locked one is drawn darker.
+        /// withheld. Only a row this player cannot have is drawn darker.
         /// </remarks>
         private void BuildDocumentRows(float x, float width, float firstRowY)
         {
@@ -593,63 +629,109 @@ namespace Overworked.UI
             }
 
             PruneFetchClocks();
+            CollectDocumentOrder(store);
 
-            /* The y is carried down through the groups rather than computed from a row number.
-             * Grouping is what breaks "the fourth row is the fourth document", so nothing here may
-             * derive a document from a position — which document a row means travels on the row. */
-            float y = BuildSourceGroup(x, width, firstRowY, store, DocumentSource.Filing);
-            BuildSourceGroup(x, width, y, store, DocumentSource.Internet);
-        }
+            float y = firstRowY;
+            int openKind = -1;
+            bool open = false;
 
-        /// <summary>
-        /// Builds one source group: its heading, then its rows.
-        /// </summary>
-        /// <remarks>
-        /// A heading is drawn only when the group has something under it; a heading with nothing
-        /// following would be a promise the round does not keep.
-        ///
-        /// Only this team's documents, for now. The other side's are real documents that exist in
-        /// the same store, and the panel is meant to show them greyed — neither team can print the
-        /// other's — but until that row is drawn, leaving them out is the honest reading: a row
-        /// nobody can press is not a row this list is entitled to offer.
-        /// </remarks>
-        /// <returns>The y the next group starts at.</returns>
-        private float BuildSourceGroup(
-            float x,
-            float width,
-            float y,
-            DocumentStore store,
-            DocumentSource source)
-        {
-            if (!HasDocumentInGroup(store, source))
-                return y;
+            /* The kind's name is resolved once, where the kind row is drawn, and handed to every
+             * document under it — so a row can never disagree with the caption above it about what
+             * kind they are both showing. */
+            string kindName = null;
 
-            AddGroupHeading(x + GroupIndent, y, width - GroupIndent, GroupName(source));
-            y += GroupHeadingHeight + RowGap;
-
-            for (int id = 0; id < store.Count; id++)
+            for (int i = 0; i < _documentOrder.Count; i++)
             {
-                if (!store.TryGet(id, out DocumentRecord record) || record.Team != _team)
-                    continue;
-                if (!store.TryGetSpec(id, out DocumentCatalogue.Spec spec) || !InGroup(spec, source))
+                int id = _documentOrder[i];
+                if (!store.TryGet(id, out DocumentRecord record))
                     continue;
 
-                AddDocumentRow(x + RowIndent, y, width - RowIndent, id, record, spec);
+                if (!open || record.SpecIndex != openKind)
+                {
+                    if (open)
+                        y += KindGap;
+
+                    bool known = store.TryGetSpec(id, out DocumentCatalogue.Spec spec);
+                    kindName = KindName(record.SpecIndex, known, spec);
+
+                    AddKindRow(
+                        x + KindIndent,
+                        y,
+                        width - KindIndent,
+                        kindName,
+                        known ? SourceLabel(spec.Source) : null);
+
+                    y += KindRowHeight + RowGap;
+
+                    openKind = record.SpecIndex;
+                    open = true;
+                }
+
+                AddDocumentRow(x + RowIndent, y, width - RowIndent, id, record, kindName);
                 y += RowHeight + RowGap;
             }
-
-            return y + GroupGap;
         }
 
         /// <summary>
-        /// Builds one row of the document column.
+        /// Puts every document into the order the column lists them in.
+        /// </summary>
+        /// <remarks>
+        /// Kinds in catalogue order; within a kind, by team and then by number.
+        ///
+        /// The sort is on the index the record already carries, which *is* the kind's position in
+        /// the catalogue — so the kinds come out in catalogue order without the panel ever needing
+        /// the catalogue itself. It has no way to reach it and no other reason to want it.
+        ///
+        /// A document whose kind is no longer in the catalogue sorts after the ones that are, which
+        /// is where it belongs: it is real, it is listed, and there is nowhere better to put it.
+        /// </remarks>
+        private void CollectDocumentOrder(DocumentStore store)
+        {
+            _documentOrder.Clear();
+
+            for (int id = 0; id < store.Count; id++)
+                _documentOrder.Add(id);
+
+            _documentOrder.Sort(CompareDocuments);
+        }
+
+        /// <summary>
+        /// Orders two documents: kind, then team, then number.
+        /// </summary>
+        /// <remarks>
+        /// Read out of the store rather than carried alongside the ids, because a comparison cannot
+        /// see the list it is sorting and the store is the one place the answer lives.
+        /// </remarks>
+        private static int CompareDocuments(int left, int right)
+        {
+            DocumentStore store = DocumentStore.Instance;
+            if (store == null)
+                return left.CompareTo(right);
+
+            store.TryGet(left, out DocumentRecord a);
+            store.TryGet(right, out DocumentRecord b);
+
+            int byKind = a.SpecIndex.CompareTo(b.SpecIndex);
+            if (byKind != 0)
+                return byKind;
+
+            int byTeam = a.Team.CompareTo(b.Team);
+
+            return byTeam != 0 ? byTeam : a.Number.CompareTo(b.Number);
+        }
+
+        /// <summary>
+        /// Builds one document row.
         /// </summary>
         /// <remarks>
         /// Nothing is derived from the row's position. The document id travels with the row, in
-        /// <see cref="DocumentRow.DocumentId"/>, because grouping means the two no longer agree.
+        /// <see cref="DocumentRow.DocumentId"/>, because the two levels mean a row's place in the
+        /// list and the document it stands for have nothing to do with each other.
         ///
-        /// The label carries the number as well as the kind, because the kind is not enough to
-        /// name a document: a round has an Excel 1 and an Excel 2, and a task asks for one of them.
+        /// The label repeats the kind and adds the number. The kind is on the caption above, but a
+        /// document is named by both — a round has an Excel 1 and an Excel 2, and a task asks for
+        /// one of them — and a row that said only "1" would be unreadable the moment the caption
+        /// scrolled past.
         /// </remarks>
         private void AddDocumentRow(
             float x,
@@ -657,22 +739,21 @@ namespace Overworked.UI
             float width,
             int documentId,
             in DocumentRecord record,
-            in DocumentCatalogue.Spec spec)
+            string kindName)
         {
+            bool mine = record.Team == _team;
             bool fetching = _computer.IsFetching(documentId);
 
-            /* A document this team has not been handed cannot be sent to a printer, and saying so
-             * on the row is where a player learns there is one they have not earned yet. */
-            bool selectable = IsUnlocked(documentId) && !fetching;
+            /* Two separate reasons a row cannot be pressed and both have to be here. The document
+             * belongs to the other side, or this side has not been handed it yet. */
+            bool selectable = mine && IsUnlocked(documentId) && !fetching;
 
             /* Waiting beats locked when both are true at once, which can happen to a fetch already
              * in flight. The document is on its way, and the countdown is the only sign of it there
              * is — so that is the more useful of the two things the row could say. */
             string label = fetching
                 ? FetchLabel(documentId, BeginTracking(documentId))
-                : selectable
-                    ? $"{spec.DisplayName} {record.Number}"
-                    : $"{spec.DisplayName} {record.Number}   锁定";
+                : $"{kindName} {record.Number}";
 
             Color baseColour = selectable || fetching ? RowColour : RowLockedColour;
 
@@ -682,7 +763,8 @@ namespace Overworked.UI
                 width,
                 label,
                 selectable ? () => Choose(documentId) : null,
-                baseColour);
+                baseColour,
+                TeamLabel(record.Team));
 
             _documentRows.Add(new DocumentRow
             {
@@ -696,73 +778,101 @@ namespace Overworked.UI
         }
 
         /// <summary>
-        /// Adds the heading that names a source group.
+        /// Adds the row that names a kind, with where it comes from.
         /// </summary>
-        private void AddGroupHeading(float x, float y, float width, string text)
+        /// <remarks>
+        /// A label rather than a button, and not the same shape as a document row: a kind cannot be
+        /// printed, so it must not look like something that could be. The round's notes say the
+        /// same about keeping the two row kinds apart in code — the colours differ, the
+        /// pressability differs, and one shared row type would have to carry a flag for each.
+        ///
+        /// The source tag is left off when the catalogue cannot name the kind. An unknown kind has
+        /// no source to show, and guessing one would put a label on the row that nothing backs.
+        /// </remarks>
+        private void AddKindRow(float x, float y, float width, string name, string sourceTag)
         {
-            GameObject headingObject = new("Group", typeof(RectTransform));
-            headingObject.transform.SetParent(_panelRect, worldPositionStays: false);
+            GameObject kindObject = new("Kind", typeof(RectTransform));
+            kindObject.transform.SetParent(_panelRect, worldPositionStays: false);
 
-            /* Registered for the next rebuild, unlike the labels AddLabel makes: a group heading is
-             * a row of the list and goes with the rest of them. */
-            _rows.Add(headingObject);
+            /* Registered for the next rebuild, unlike the labels AddLabel makes: a kind row is a row
+             * of the list and goes with the rest of them. */
+            _rows.Add(kindObject);
 
-            RectTransform rect = (RectTransform)headingObject.transform;
+            RectTransform rect = (RectTransform)kindObject.transform;
             rect.anchorMin = new Vector2(0f, 1f);
             rect.anchorMax = new Vector2(0f, 1f);
             rect.pivot = new Vector2(0f, 1f);
             rect.anchoredPosition = new Vector2(x, -y);
-            rect.sizeDelta = new Vector2(width, GroupHeadingHeight);
+            rect.sizeDelta = new Vector2(width, KindRowHeight);
 
-            TextMeshProUGUI label = headingObject.AddComponent<TextMeshProUGUI>();
-            ApplyText(label, text, GroupHeadingFontSize, TextAlignmentOptions.MidlineLeft);
+            TextMeshProUGUI label = AddText(kindObject.transform, "Label", name, KindFontSize, TextAlignmentOptions.MidlineLeft);
+            ApplyNameRect(label.rectTransform, sourceTag != null);
 
-            /* Dimmer than a row, and smaller, so it reads as a caption for what follows rather than
-             * as one more thing that could be pressed. */
-            label.color = GroupHeadingColour;
+            /* Dimmer than a document row, so it reads as a caption for what follows rather than as
+             * one more thing that could be pressed. */
+            label.color = KindColour;
+
+            if (sourceTag == null)
+                return;
+
+            TextMeshProUGUI tag = AddText(kindObject.transform, "Tag", sourceTag, KindFontSize, TextAlignmentOptions.MidlineRight);
+            ApplyTagRect(tag.rectTransform);
+            tag.color = KindColour;
         }
 
         /// <summary>
-        /// Whether a document has been handed over to this player's team.
+        /// What to call a kind, including when the catalogue cannot name it.
         /// </summary>
         /// <remarks>
-        /// A missing component means nothing is locked, which is what the server does with the
-        /// same answer: a scene that predates unlocks offers everything rather than nothing. The
-        /// two failures are not symmetric, and the cheap one is the one to prefer.
+        /// A document whose kind has been deleted from the catalogue is still a real document and
+        /// may be in somebody's hands, so it is listed under a stand-in name rather than dropped.
+        /// Losing a document silently is the worst way for this column to be wrong, because nothing
+        /// about it looks wrong.
         /// </remarks>
-        private static bool IsUnlocked(int specIndex)
+        private static string KindName(int specIndex, bool known, in DocumentCatalogue.Spec spec) =>
+            known && !string.IsNullOrEmpty(spec.DisplayName) ? spec.DisplayName : $"种类 {specIndex}";
+
+        /// <summary>
+        /// Which side a document belongs to, as the tag at the end of its row.
+        /// </summary>
+        /// <remarks>
+        /// Only the two teams the round has names for are given letters. Anything else is printed
+        /// as the number it is: a team nobody has defined is not team A, and guessing would put a
+        /// document on the wrong side of a rule the server is enforcing.
+        /// </remarks>
+        private static string TeamLabel(int team) => team switch
+        {
+            0 => "A",
+            1 => "B",
+            _ => team.ToString(),
+        };
+
+        /// <summary>
+        /// Where a kind comes from, as the tag at the end of its row.
+        /// </summary>
+        /// <remarks>
+        /// Anything that is not Internet is filed, rather than only the value that means filing. A
+        /// source the catalogue does not define is a data-entry mistake, and the harmless reading
+        /// of it is the one to take.
+        /// </remarks>
+        private static string SourceLabel(int source) =>
+            (DocumentSource)source == DocumentSource.Internet ? "Internet" : "后台";
+
+        /// <summary>
+        /// Whether this player's side has been handed a document.
+        /// </summary>
+        /// <remarks>
+        /// A missing component means nothing is locked, which is what the server does with the same
+        /// answer: a scene that predates unlocks offers everything rather than nothing. The two
+        /// failures are not symmetric, and the cheap one is the one to prefer.
+        ///
+        /// The server asks the same question again when a document is actually sent, because this
+        /// answer decides only whether a row can be pressed.
+        /// </remarks>
+        private static bool IsUnlocked(int documentId)
         {
             DocumentUnlocks unlocks = DocumentUnlocks.Instance;
-            return unlocks == null || unlocks.IsUnlocked(specIndex);
-        }
-
-        /// <summary>
-        /// Whether a kind belongs in a group.
-        /// </summary>
-        /// <remarks>
-        /// Anything that is not Internet is filed, rather than only the value that means filing.
-        /// A source the catalogue does not define is a data-entry mistake, and the one outcome that
-        /// must not come of it is a kind appearing in no group at all — the panel would silently
-        /// drop a document, which is exactly what a hand-written grouping invites.
-        /// </remarks>
-        private static bool InGroup(DocumentCatalogue.Spec spec, DocumentSource source) =>
-            ((DocumentSource)spec.Source == DocumentSource.Internet)
-            == (source == DocumentSource.Internet);
-
-        /// <summary>
-        /// Whether a group has anything under it.
-        /// </summary>
-        private bool HasDocumentInGroup(DocumentStore store, DocumentSource source)
-        {
-            for (int id = 0; id < store.Count; id++)
-            {
-                if (!store.TryGet(id, out DocumentRecord record) || record.Team != _team)
-                    continue;
-                if (store.TryGetSpec(id, out DocumentCatalogue.Spec spec) && InGroup(spec, source))
-                    return true;
-            }
-
-            return false;
+            return unlocks == null || unlocks.IsUnlocked(documentId);
         }
 
         /// <summary>
@@ -934,8 +1044,12 @@ namespace Overworked.UI
         /// that is not on offer.
         /// </param>
         /// <param name="background">
-        /// Background colour, or null for the ordinary one. Used to draw a row that is withheld
-        /// darker than the rest without making it unreadable.
+        /// Background colour, or null for the ordinary one. Used to draw a row this player cannot
+        /// have darker than the rest without making it unreadable.
+        /// </param>
+        /// <param name="tag">
+        /// Text for the right-hand end of the row — a team, or where a kind comes from — or null
+        /// for a row that has nothing to put there.
         /// </param>
         private Button AddRow(
             float x,
@@ -943,9 +1057,10 @@ namespace Overworked.UI
             float width,
             string label,
             System.Action onClick,
-            Color? background = null)
+            Color? background = null,
+            string tag = null)
         {
-            Button button = CreateButton("Row", x, y, width, RowHeight, label, RowFontSize, onClick);
+            Button button = CreateButton("Row", x, y, width, RowHeight, label, RowFontSize, onClick, tag);
 
             /* Registered for the next rebuild. Built here rather than inside CreateButton so that
              * the window's permanent parts, which share that method, are not swept up with them. */
@@ -976,7 +1091,8 @@ namespace Overworked.UI
             float height,
             string label,
             float fontSize,
-            System.Action onClick)
+            System.Action onClick,
+            string tag = null)
         {
             GameObject buttonObject = new(name, typeof(RectTransform));
             buttonObject.transform.SetParent(_panelRect, worldPositionStays: false);
@@ -1010,27 +1126,89 @@ namespace Overworked.UI
             if (onClick != null)
                 button.onClick.AddListener(() => onClick());
 
-            AddLabelTo(buttonObject.transform, label, fontSize);
+            /* The name first and the tag second, and that order matters: a document row finds its
+             * own name text with GetComponentInChildren, which returns the first one in the
+             * hierarchy. Adding the tag first would hand every row its tag as its label, and the
+             * countdown would be written over the team letter. */
+            AddLabelTo(buttonObject.transform, label, fontSize, tag != null);
+
+            if (tag != null)
+                AddTagTo(buttonObject.transform, tag, fontSize);
 
             return button;
         }
 
         /// <summary>
-        /// Adds a text child filling a button.
+        /// Adds the name text of a row.
         /// </summary>
-        private void AddLabelTo(Transform parent, string text, float fontSize)
+        /// <param name="roomForTag">
+        /// True when the row also carries a tag, which the name has to stop short of.
+        /// </param>
+        private void AddLabelTo(Transform parent, string text, float fontSize, bool roomForTag)
         {
-            GameObject textObject = new("Label", typeof(RectTransform));
+            TextMeshProUGUI label = AddText(parent, "Label", text, fontSize, TextAlignmentOptions.MidlineLeft);
+            ApplyNameRect(label.rectTransform, roomForTag);
+        }
+
+        /// <summary>
+        /// Adds the tag that ends a row.
+        /// </summary>
+        private void AddTagTo(Transform parent, string text, float fontSize)
+        {
+            TextMeshProUGUI tag = AddText(parent, "Tag", text, fontSize, TextAlignmentOptions.MidlineRight);
+            ApplyTagRect(tag.rectTransform);
+        }
+
+        /// <summary>
+        /// Creates a text under a parent.
+        /// </summary>
+        /// <remarks>
+        /// The rectangle is left to the caller, because a row's name and its tag are placed against
+        /// each other and only the pair knows how much room each of them gets.
+        /// </remarks>
+        private TextMeshProUGUI AddText(
+            Transform parent,
+            string name,
+            string text,
+            float fontSize,
+            TextAlignmentOptions alignment)
+        {
+            GameObject textObject = new(name, typeof(RectTransform));
             textObject.transform.SetParent(parent, worldPositionStays: false);
 
-            RectTransform rect = (RectTransform)textObject.transform;
+            TextMeshProUGUI label = textObject.AddComponent<TextMeshProUGUI>();
+            ApplyText(label, text, fontSize, alignment);
+
+            return label;
+        }
+
+        /// <summary>
+        /// Places the name of a row, stopping short of the tag when the row has one.
+        /// </summary>
+        private static void ApplyNameRect(RectTransform rect, bool roomForTag)
+        {
             rect.anchorMin = Vector2.zero;
             rect.anchorMax = Vector2.one;
             rect.pivot = new Vector2(0.5f, 0.5f);
-            rect.offsetMin = new Vector2(14f, 0f);
-            rect.offsetMax = new Vector2(-14f, 0f);
+            rect.offsetMin = new Vector2(LabelInset, 0f);
+            rect.offsetMax = new Vector2(roomForTag ? -(TagWidth + TagInset) : -LabelInset, 0f);
+        }
 
-            ApplyText(textObject.AddComponent<TextMeshProUGUI>(), text, fontSize, TextAlignmentOptions.MidlineLeft);
+        /// <summary>
+        /// Places the tag at the end of a row, against its right edge.
+        /// </summary>
+        /// <remarks>
+        /// Anchored rather than positioned, so it stays against the right edge whatever width the
+        /// row is given. Both offsets are negative because, with the anchors stretched across the
+        /// row, they are measured inwards from that edge.
+        /// </remarks>
+        private static void ApplyTagRect(RectTransform rect)
+        {
+            rect.anchorMin = Vector2.zero;
+            rect.anchorMax = Vector2.one;
+            rect.pivot = new Vector2(0.5f, 0.5f);
+            rect.offsetMin = new Vector2(-(TagWidth + TagInset), 0f);
+            rect.offsetMax = new Vector2(-TagInset, 0f);
         }
 
         /// <summary>
@@ -1217,17 +1395,6 @@ namespace Overworked.UI
         }
 
         // ------------------------------------------------------------------ helpers
-
-        /// <summary>
-        /// What a source group is called.
-        /// </summary>
-        /// <remarks>
-        /// The source is named once per group rather than repeated on every row. With the rows
-        /// sitting under a heading that already says where they come from, a suffix on each of them
-        /// would be the same word twice in a column two rows tall.
-        /// </remarks>
-        private static string GroupName(DocumentSource source) =>
-            source == DocumentSource.Internet ? "Internet" : "后台文件";
 
         /// <summary>
         /// Orders printers by the name they are listed under.
