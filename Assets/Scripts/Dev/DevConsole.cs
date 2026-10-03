@@ -154,7 +154,7 @@ namespace Overworked.Dev
         /// Every first word the console knows.
         /// </summary>
         private static readonly string[] Verbs =
-            { "spawn", "clear", "give", "tp", "pos", "document", "docs", "queue", "printers", "help" };
+            { "spawn", "clear", "give", "tp", "pos", "team", "document", "docs", "queue", "printers", "unlock", "unlocks", "help" };
 
 #if UNITY_EDITOR
         /// <summary>
@@ -380,6 +380,18 @@ namespace Overworked.Dev
                     ListPrinters();
                     return;
 
+                case "unlock":
+                    Unlock(parts);
+                    return;
+
+                case "unlocks":
+                    ListUnlocks();
+                    return;
+
+                case "team":
+                    SetTeam(parts);
+                    return;
+
                 default:
                     Log($"unknown command '{verb}'. Try 'help'.");
                     return;
@@ -396,10 +408,14 @@ namespace Overworked.Dev
             Log("give <payload> [number] [team]           put one into the local player's hands");
             Log("tp <x> <y>                               move the local player to a cell");
             Log("pos                                      print the local player's cell");
-            Log("document <spec> [team]                   make a document from the spec list");
-            Log("docs                                     list the documents that exist");
+            Log("team <n>                                 put the local player on a team (test seam)");
+            Log("document <spec> [team]                   name a document; prints its id");
+            Log("docs                                     list the round's documents and their ids");
             Log("queue <printer> <document>               put a document in a machine's job queue");
             Log("printers                                 list the printers and their queues");
+            Log("unlock <document>                        hand one over so it can be printed");
+            Log("unlock reset                             take every document back");
+            Log("unlocks                                  list every document and whether it is handed over");
             Log("help                                     this");
             Log("Coordinates are grid cells; objects land on the cell centre.");
         }
@@ -707,6 +723,53 @@ namespace Overworked.Dev
         }
 
         /// <summary>
+        /// <c>team &lt;n&gt;</c>
+        /// </summary>
+        /// <remarks>
+        /// Moves the local player onto a team, and is the only way to do it: nothing in the game
+        /// assigns teams yet. Without it every player is on team A, and the two things this round
+        /// added cannot be exercised at all — a document's number counting per team, and the other
+        /// team's being refused.
+        ///
+        /// It sets the team on this peer's own player, which on a listen server is the host's; a
+        /// client is refused before it gets that far anyway. **A test seam, not match making** —
+        /// the round that assigns teams properly will have more to decide than this one line.
+        /// </remarks>
+        private void SetTeam(string[] parts)
+        {
+            if (!RequireServer())
+                return;
+            if (parts.Length < 2)
+            {
+                Log("usage: team <n>");
+                return;
+            }
+            if (!TryParse(parts[1], "team", out int team))
+                return;
+
+            NetworkObject player = FindLocalPlayer();
+            if (player == null)
+            {
+                Log("no local player to put on a team.");
+                return;
+            }
+
+            PlayerInteraction interaction = player.GetComponent<PlayerInteraction>();
+            if (interaction == null)
+            {
+                Log("the local player has no PlayerInteraction.");
+                return;
+            }
+
+            interaction.ServerSetTeam(team);
+
+            /* Says which command to reach for next, because the team does not travel on its own:
+             * the panel filters on it, and 'document' takes one as an argument rather than
+             * reading it. */
+            Log($"team {team}. The panel filters on this; pass it to 'document' to name one for this side.");
+        }
+
+        /// <summary>
         /// <c>document &lt;spec&gt; [team]</c>
         /// </summary>
         /// <remarks>
@@ -761,14 +824,15 @@ namespace Overworked.Dev
                 return;
             }
 
-            int id = store.ServerCreate(entry.PayloadIndex, team, entry.Source);
+            int id = store.ServerCreate(spec, team);
 
             /* Read back rather than predicting what it became: the number is the store's to give,
-             * and the printed id is the argument the next command wants. */
+             * and the printed id is the argument the next two commands want. */
             store.TryGet(id, out DocumentRecord record);
 
-            Log($"created document {id}: spec {spec} '{entry.DisplayName}', payload {record.PayloadIndex}, " +
-                $"number {record.Number}, team {record.Team}, source {(DocumentSource)record.Source}.");
+            Log($"named document {id}: kind {spec} '{entry.DisplayName}', number {record.Number}, " +
+                $"team {record.Team}, source {(DocumentSource)entry.Source}. " +
+                "'unlock' still has to hand it to somebody before it can be printed.");
         }
 
         /// <summary>
@@ -793,7 +857,7 @@ namespace Overworked.Dev
             }
             if (store.Count == 0)
             {
-                Log("no documents yet. 'document <spec>' makes one.");
+                Log("no documents yet. 'document <spec>' names one.");
                 return;
             }
 
@@ -801,9 +865,14 @@ namespace Overworked.Dev
             {
                 if (!store.TryGet(id, out DocumentRecord record))
                     continue;
+                if (!store.TryGetSpec(id, out DocumentCatalogue.Spec entry))
+                {
+                    Log($"#{id}  (kind {record.SpecIndex} is not in the catalogue)");
+                    continue;
+                }
 
-                Log($"#{id}  payload {record.PayloadIndex}  number {record.Number}  " +
-                    $"team {record.Team}  {(DocumentSource)record.Source}");
+                Log($"#{id}  {entry.DisplayName} {record.Number}  team {record.Team}  " +
+                    $"{(DocumentSource)entry.Source}");
             }
 
             Log($"{store.Count} document(s).");
@@ -905,6 +974,187 @@ namespace Overworked.Dev
 
                 Log($"#{i}  {machine.name}  cell ({cell.x}, {cell.y})  queue {fill}{printing}");
             }
+        }
+
+        /// <summary>
+        /// <c>unlock &lt;document&gt;</c> and <c>unlock reset</c>
+        /// </summary>
+        /// <remarks>
+        /// The only way to hand a document over this round. That is meant to be something an NPC
+        /// does, and there are no NPCs yet, so the call they will eventually make is reachable from
+        /// here — which is what lets the panel and the data layer be finished and tested before
+        /// anything exists to hand a document over.
+        ///
+        /// Takes a **document id**, not a kind. What a player earns is an Excel 2, not "Excel" —
+        /// and two teams earn two different Excel 2s. <c>docs</c> lists the ids.
+        ///
+        /// Deliberately separate from <c>document</c>. Naming a document and handing it over are
+        /// two acts in the game now, and a console that could only do both at once could not set up
+        /// the state the difference is about: a task that names three documents and hands over one.
+        ///
+        /// Server only. The list is replicated state, and a client that could append to it would be
+        /// handing documents to everybody.
+        /// </remarks>
+        private void Unlock(string[] parts)
+        {
+            if (!RequireServer())
+                return;
+
+            DocumentUnlocks unlocks = DocumentUnlocks.Instance;
+            if (unlocks == null)
+            {
+                Log("no DocumentUnlocks in the scene, so there is nothing to hand over.");
+                return;
+            }
+
+            DocumentStore store = DocumentStore.Instance;
+            if (store == null)
+            {
+                Log("no DocumentStore in the scene.");
+                return;
+            }
+
+            if (parts.Length < 2)
+            {
+                Log("usage: unlock <document>, or 'unlock reset'. 'docs' lists the documents and their ids.");
+                return;
+            }
+
+            if (parts[1].ToLowerInvariant() == "reset")
+            {
+                unlocks.ServerResetUnlocks();
+                Log("reset; nothing is handed over.");
+                return;
+            }
+
+            if (!TryParse(parts[1], "document", out int id))
+                return;
+
+            if (!store.TryGet(id, out DocumentRecord record))
+            {
+                Log($"no document {id}. 'docs' lists them.");
+                return;
+            }
+
+            /* Named before handing over purely so the answer can say which document it was.
+             * ServerUnlock reports "no such document" and "already handed over" the same way,
+             * which is the right answer for a caller that only wants to know whether it can be
+             * printed. */
+            string name = DescribeDocument(store, id, record);
+
+            if (unlocks.IsUnlocked(id))
+            {
+                Log($"{name} is already handed over.");
+                return;
+            }
+
+            if (!unlocks.ServerUnlock(id))
+            {
+                /* Reached only when the store knows the document and the component says it is not
+                 * handed over — so the component cannot see the store. Says so rather than
+                 * reporting a refusal, because "refused" would send whoever reads it looking for a
+                 * rule instead of a missing component. */
+                Log($"{name} could not be handed over; check that the scene has a DocumentStore.");
+                return;
+            }
+
+            Log($"handed over {name}; {Ordinal(unlocks, id)} of {unlocks.UnlockedCount} so far.");
+        }
+
+        /// <summary>
+        /// A document as one readable phrase.
+        /// </summary>
+        /// <remarks>
+        /// The kind and number when the catalogue can say what the kind is, and the raw kind index
+        /// when it cannot. A record whose kind has been removed from the catalogue is still a real
+        /// document that somebody may be holding, so it is reported rather than skipped — the
+        /// alternative is a document that exists and cannot be seen.
+        /// </remarks>
+        private static string DescribeDocument(DocumentStore store, int id, in DocumentRecord record)
+        {
+            if (store.TryGetSpec(id, out DocumentCatalogue.Spec spec))
+                return $"#{id} '{spec.DisplayName} {record.Number}' team {record.Team}";
+
+            return $"#{id} (kind {record.SpecIndex} is not in the catalogue)";
+        }
+
+        /// <summary>
+        /// <c>unlocks</c>
+        /// </summary>
+        /// <remarks>
+        /// Every document the round has named and whether it has been handed over — the ones that
+        /// have not included, which is the whole point. A list showing only what a player holds
+        /// would look exactly like the same list from before this feature existed.
+        ///
+        /// Reads and changes nothing, so like <c>docs</c> and <c>printers</c> it is not a server
+        /// command: a client being told a different set from the server is worth being able to ask
+        /// about from the client.
+        /// </remarks>
+        private void ListUnlocks()
+        {
+            DocumentStore store = DocumentStore.Instance;
+            if (store == null)
+            {
+                Log("no DocumentStore in the scene.");
+                return;
+            }
+
+            DocumentUnlocks unlocks = DocumentUnlocks.Instance;
+
+            /* Said before the list rather than instead of it. With no component every row below
+             * reads as handed over, and that is otherwise indistinguishable from a round where
+             * everything has been — which is a wiring mistake worth being able to see. */
+            if (unlocks == null)
+                Log("no DocumentUnlocks in the scene; nothing is locked.");
+
+            if (store.Count == 0)
+            {
+                Log("no documents yet. 'document <spec>' names one.");
+                return;
+            }
+
+            int handed = 0;
+
+            for (int id = 0; id < store.Count; id++)
+            {
+                if (!store.TryGet(id, out DocumentRecord record))
+                    continue;
+
+                bool open = unlocks == null || unlocks.IsUnlocked(id);
+                if (open)
+                    handed++;
+
+                Log($"{Mark(open)} {DescribeDocument(store, id, record)}");
+            }
+
+            Log($"{handed} of {store.Count} handed over.");
+        }
+
+        /// <summary>
+        /// The tick and dot the document lists are drawn with.
+        /// </summary>
+        /// <remarks>
+        /// A middle dot and a check mark rather than box drawing or an emoji: the dot is Latin-1
+        /// and the tick is one of the oldest dingbats, so these are the two a status column has
+        /// the best chance of getting from whatever font it ends up rendered in. A glyph the font
+        /// does not have comes out as a box, and a status column that reads differently on every
+        /// machine is worse than one with no marks at all.
+        /// </remarks>
+        private static string Mark(bool handed) => handed ? "✓" : "·";
+
+        /// <summary>
+        /// Where a document sits in the handed-over list, counting from one; zero when it is not
+        /// there.
+        /// </summary>
+        private static int Ordinal(DocumentUnlocks unlocks, int documentId)
+        {
+            for (int i = 0; i < unlocks.UnlockedCount; i++)
+            {
+                if (unlocks.TryGetUnlocked(i, out int handed) && handed == documentId)
+                    return i + 1;
+            }
+
+            return 0;
         }
 
         /// <summary>
@@ -1106,6 +1356,24 @@ namespace Overworked.Dev
 
             if (verb == "queue" && position == 2)
             {
+                DocumentStore store = DocumentStore.Instance;
+                if (store != null)
+                {
+                    for (int id = 0; id < store.Count; id++)
+                        result.Add(id.ToString());
+                }
+
+                return result;
+            }
+
+            if (verb == "unlock" && position == 1)
+            {
+                result.Add("reset");
+
+                /* Every document, including the ones already handed over. Completing only what
+                 * could still be handed over would make the list shrink as the round goes on, and
+                 * the one thing this command has to be able to answer is whether a given document
+                 * has been. */
                 DocumentStore store = DocumentStore.Instance;
                 if (store != null)
                 {

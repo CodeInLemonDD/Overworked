@@ -556,9 +556,9 @@ namespace Overworked.Stations
             if (slot == null || slot.IsFull)
                 return;
 
-            /* OwnerClientId stays at -1 on purpose. Stock is public: paper and ink belong to
-             * nobody, and the faction rotation that used to run here belongs to the file queue
-             * instead, where each document will carry the faction that ordered it. */
+            /* Stock is a shared pool: paper and ink belong to nobody, and who fed them in
+             * changes nothing. Which side asked for a print belongs to the document in the job
+             * queue, not to the material. */
             if (!slot.ServerTryAdd(ContainerEntry.ForEntity(payload)))
                 return;
 
@@ -778,7 +778,9 @@ namespace Overworked.Stations
              * went into a folder. Refusing leaves it in the machine, where it can be taken once
              * the store is reachable. */
             DocumentStore store = DocumentStore.Instance;
-            if (store == null || !store.TryGet(entry.DataId, out DocumentRecord document))
+            if (store == null
+                || !store.TryGet(entry.DataId, out DocumentRecord document)
+                || !store.TryGetSpec(entry.DataId, out DocumentCatalogue.Spec spec))
             {
                 Debug.LogWarning(
                     $"{nameof(Printer)} on {gameObject.name} could not resolve document {entry.DataId}; the sheet was left in the machine.",
@@ -800,7 +802,7 @@ namespace Overworked.Stations
             /* Spawn before removing, so the failure above and any other one costs the machine a
              * sheet rather than the player one. */
             NetworkObject nob = GrabbableSpawner.SpawnGrabbable(
-                document.PayloadIndex,
+                spec.PayloadIndex,
                 player.HandPosition,
                 Quaternion.identity,
                 conn,

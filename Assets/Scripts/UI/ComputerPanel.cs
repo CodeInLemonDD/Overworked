@@ -102,9 +102,59 @@ namespace Overworked.UI
         private const float HeaderHeight = 30f;
 
         /// <summary>
+        /// Height of the row that names a kind.
+        /// </summary>
+        private const float KindRowHeight = 30f;
+
+        /// <summary>
+        /// Extra space left under a kind's documents, so the next kind reads as a new group rather
+        /// than as one more row.
+        /// </summary>
+        private const float KindGap = 12f;
+
+        /// <summary>
+        /// How far a kind row is indented from the column edge.
+        /// </summary>
+        private const float KindIndent = 8f;
+
+        /// <summary>
+        /// How far a document row is indented under its kind.
+        /// </summary>
+        /// <remarks>
+        /// The indentation is the only thing saying a document belongs to the kind above it.
+        /// Without it the two levels are one flat list with captions lost inside it, and the
+        /// difference between "Excel" and "Excel 1" stops being visible at all.
+        /// </remarks>
+        private const float RowIndent = 34f;
+
+        /// <summary>
+        /// Left inset for the text of any row, kind or document.
+        /// </summary>
+        private const float LabelInset = 14f;
+
+        /// <summary>
+        /// Right inset for the tag that ends a row.
+        /// </summary>
+        private const float TagInset = 12f;
+
+        /// <summary>
+        /// Width reserved at the end of a row for that tag.
+        /// </summary>
+        /// <remarks>
+        /// Fixed rather than measured from the text. Both the name and the tag are laid out against
+        /// it, so a long kind name ellipsizes instead of pushing the tag off the row.
+        /// </remarks>
+        private const float TagWidth = 46f;
+
+        /// <summary>
         /// Font size for body rows.
         /// </summary>
         private const float RowFontSize = 22f;
+
+        /// <summary>
+        /// Font size for the row that names a kind.
+        /// </summary>
+        private const float KindFontSize = 20f;
 
         /// <summary>
         /// Font size for headers and the title.
@@ -125,6 +175,21 @@ namespace Overworked.UI
         /// Background of the document that is chosen.
         /// </summary>
         private static readonly Color RowChosenColour = new(0.20f, 0.42f, 0.62f, 0.95f);
+
+        /// <summary>
+        /// Background of a row that cannot be pressed yet.
+        /// </summary>
+        /// <remarks>
+        /// A darker step of <see cref="RowColour"/> rather than a tint or a fade, and the text is
+        /// left alone: a locked document has to stay as readable as an open one. The point of
+        /// showing it at all is that the player learns there is something they have not found.
+        /// </remarks>
+        private static readonly Color RowLockedColour = new(0.11f, 0.12f, 0.145f, 0.95f);
+
+        /// <summary>
+        /// Colour of the row that names a kind.
+        /// </summary>
+        private static readonly Color KindColour = new(0.62f, 0.67f, 0.76f, 1f);
 
         /// <summary>
         /// Window background.
@@ -156,10 +221,10 @@ namespace Overworked.UI
         /// <summary>
         /// The document rows, in catalogue order.
         /// </summary>
-        private readonly List<SpecRow> _documentRows = new();
+        private readonly List<DocumentRow> _documentRows = new();
 
         /// <summary>
-        /// When this client first saw each spec start being fetched, by catalogue index.
+        /// When this client first saw each document start being fetched, by document id.
         /// </summary>
         /// <remarks>
         /// Local, and deliberately so. The server publishes **that** a fetch is running and never
@@ -180,21 +245,43 @@ namespace Overworked.UI
         private readonly List<int> _pruneBuffer = new();
 
         /// <summary>
+        /// The document ids, in the order the column lists them.
+        /// </summary>
+        /// <remarks>
+        /// Sorted once per rebuild rather than walked in store order, because the store is in the
+        /// order documents were named and the column is in the order kinds are catalogued. Sizing
+        /// this by hand at a few dozen entries is not worth a second structure; the sort is what
+        /// turns "which kind comes first" into a question the ids already answer.
+        /// </remarks>
+        private readonly List<int> _documentOrder = new();
+
+        /// <summary>
         /// One row of the document column.
         /// </summary>
         /// <remarks>
         /// A record rather than three lists kept the same length, because they are only ever
         /// right together and a row that is fetching has no business lighting up as the chosen
-        /// document — so which row means which spec, and whether it can be picked at all, have
+        /// document — so which row means which document, and whether it can be picked at all,
         /// to travel with the row.
         /// </remarks>
-        private sealed class SpecRow
+        private sealed class DocumentRow
         {
             public Button Button;
             public Image Background;
             public TextMeshProUGUI Label;
-            public int SpecIndex;
+            public int DocumentId;
             public bool Selectable;
+
+            /// <summary>
+            /// What the background goes back to when this row is not the chosen one.
+            /// </summary>
+            /// <remarks>
+            /// Carried on the row rather than recomputed, because <see cref="Choose"/> repaints
+            /// every row in the column and only the row knows which of the two ordinary colours it
+            /// is entitled to. Without it, the first click anywhere lights up every row that is
+            /// not on offer — and the one thing a locked row has to look like is locked.
+            /// </remarks>
+            public Color BaseColour;
         }
 
         /// <summary>
@@ -213,6 +300,31 @@ namespace Overworked.UI
         private Computer _computer;
 
         /// <summary>
+        /// The unlocks this panel is following, or null while closed — and null for good on a
+        /// scene that has none.
+        /// </summary>
+        /// <remarks>
+        /// Held rather than read back from <see cref="DocumentUnlocks.Instance"/> when unsubscribing,
+        /// for the same reason the computer is: the static can have been cleared by the time the
+        /// window closes, and a subscription that cannot be found again is one that stays attached
+        /// to a panel that no longer belongs to it.
+        /// </remarks>
+        private DocumentUnlocks _unlocks;
+
+        /// <summary>
+        /// The team this panel's player is on.
+        /// </summary>
+        /// <remarks>
+        /// Cached when the window opens rather than read per row, for the same reason the movement
+        /// and stamina components are: by the time a row is built, the answer has to be something
+        /// this window already holds rather than something it goes looking for.
+        ///
+        /// Every document belongs to a team and only that team may print it, so this is what tells
+        /// the panel which of the store's documents are its business.
+        /// </remarks>
+        private int _team;
+
+        /// <summary>
         /// The movement component on the same player, cached so input can be handed back.
         /// </summary>
         private PlayerMovementPrediction _movement;
@@ -225,7 +337,7 @@ namespace Overworked.UI
         /// <summary>
         /// Index of the chosen document, or -1 when there is nothing to choose.
         /// </summary>
-        private int _chosenSpec = -1;
+        private int _chosenDocument = -1;
 
         /// <summary>
         /// Whether the panel is on screen.
@@ -265,16 +377,28 @@ namespace Overworked.UI
             _interaction = interaction;
             _computer = computer;
 
-            /* Followed rather than sampled: a fetch landing while the window is open changes what
-             * the document column can offer, and a list that only redrew when the player happened
-             * to click something would keep offering a document that is already on its way. */
-            _computer.FetchingChanged += OnFetchingChanged;
+            /* Followed rather than sampled. Two things can change what the document column may
+             * offer while the window is open: a fetch starting or landing, and a document being
+             * up. Both have to redraw it, and both go through the one handler — the work they need
+             * is identical, and a second copy of it would be a second place for the selection to be
+             * forgotten. */
+            _computer.FetchingChanged += OnOfferChanged;
+
+            _unlocks = DocumentUnlocks.Instance;
+            if (_unlocks != null)
+                _unlocks.UnlockedChanged += OnOfferChanged;
 
             /* Cached now rather than looked up when the panel closes: by then the player object may
              * be gone, and leaving input switched off on a player that is still alive is the worst
              * way to find out. */
             _movement = interaction.GetComponent<PlayerMovementPrediction>();
             _stamina = interaction.GetComponent<PlayerStamina>();
+
+            /* Which side of the round this window belongs to. Read from the player rather than
+             * asked of the server, because it is the same answer on every peer and there is
+             * nothing to disagree about — and the server checks the team again where it matters,
+             * when a document is actually sent to a printer. */
+            _team = interaction.Team;
 
             Build();
             Rebuild();
@@ -284,7 +408,7 @@ namespace Overworked.UI
              * click do nothing, which reads as the window being broken. A row that is already
              * waiting is passed over for the same reason — it cannot be sent, so it cannot be what
              * the first click spends. */
-            Choose(FirstSelectableSpec());
+            Choose(FirstSelectableDocument());
 
             _canvasObject.SetActive(true);
             SetGameplayInputEnabled(false);
@@ -301,10 +425,13 @@ namespace Overworked.UI
 
             _open = false;
 
-            /* Before the reference is dropped, and unconditionally: a panel left subscribed to a
+            /* Before the references are dropped, and unconditionally: a panel left subscribed to a
              * machine it no longer belongs to would rebuild another window's rows. */
             if (_computer != null)
-                _computer.FetchingChanged -= OnFetchingChanged;
+                _computer.FetchingChanged -= OnOfferChanged;
+
+            if (_unlocks != null)
+                _unlocks.UnlockedChanged -= OnOfferChanged;
 
             _fetchStartedAt.Clear();
 
@@ -317,6 +444,7 @@ namespace Overworked.UI
 
             _interaction = null;
             _computer = null;
+            _unlocks = null;
             _movement = null;
             _stamina = null;
         }
@@ -472,63 +600,290 @@ namespace Overworked.UI
         }
 
         /// <summary>
-        /// Builds the document column.
+        /// Builds the document column: a row per kind, and the documents of that kind under it.
         /// </summary>
         /// <remarks>
-        /// A row whose document is already on its way is drawn in place and made unclickable
-        /// rather than removed. A list that shortened itself under the player's cursor would move
-        /// whatever they were about to press, and ordering the same document twice is the mistake
-        /// that invites.
+        /// A kind is listed only when something exists under it. A round names documents, not
+        /// kinds, and the catalogue is a list of what *could* be asked for rather than of what has
+        /// been — so a kind with nothing under it is a caption over nothing, and there would be one
+        /// for every entry in the asset.
+        ///
+        /// Rows that cannot be pressed — the other side's, one this side has not been handed, one
+        /// already on its way — are drawn in place and made unclickable rather than removed. A list
+        /// that shortened itself under the player's cursor would move whatever they were about to
+        /// press; and hiding a document they have not earned would hide the one thing the round
+        /// wants them to see, which is that it exists.
+        ///
+        /// Whether a row can be pressed is not the same as whether it is lit: a row that is waiting
+        /// cannot be pressed but stays at full brightness, because it is working rather than
+        /// withheld. Only a row this player cannot have is drawn darker.
         /// </remarks>
         private void BuildDocumentRows(float x, float width, float firstRowY)
         {
-            DocumentCatalogue catalogue = _computer.Catalogue;
+            DocumentStore store = DocumentStore.Instance;
 
-            if (catalogue == null || catalogue.Count == 0)
+            if (store == null || store.Count == 0)
             {
-                AddRow(x, firstRowY, width, "(没有可获取的文档)", null);
+                AddRow(x, firstRowY, width, "(这个回合还没有任何文件)", null);
                 return;
             }
 
-            PruneFetchClocks(catalogue);
+            PruneFetchClocks();
+            CollectDocumentOrder(store);
 
-            for (int i = 0; i < catalogue.Count; i++)
+            float y = firstRowY;
+            int openKind = -1;
+            bool open = false;
+
+            /* The kind's name is resolved once, where the kind row is drawn, and handed to every
+             * document under it — so a row can never disagree with the caption above it about what
+             * kind they are both showing. */
+            string kindName = null;
+
+            for (int i = 0; i < _documentOrder.Count; i++)
             {
-                if (!catalogue.TryGet(i, out DocumentCatalogue.Spec spec))
+                int id = _documentOrder[i];
+                if (!store.TryGet(id, out DocumentRecord record))
                     continue;
 
-                int index = i;
-                bool fetching = _computer.IsFetching(i);
-
-                Button row = AddRow(
-                    x,
-                    firstRowY + i * (RowHeight + RowGap),
-                    width,
-                    fetching
-                        ? FetchLabel(i, BeginTracking(i))
-                        : $"{spec.DisplayName}   [{SourceName(spec.Source)}]",
-                    fetching ? null : () => Choose(index));
-
-                _documentRows.Add(new SpecRow
+                if (!open || record.SpecIndex != openKind)
                 {
-                    Button = row,
-                    Background = row.GetComponent<Image>(),
-                    Label = row.GetComponentInChildren<TextMeshProUGUI>(),
-                    SpecIndex = i,
-                    Selectable = !fetching,
-                });
+                    if (open)
+                        y += KindGap;
+
+                    bool known = store.TryGetSpec(id, out DocumentCatalogue.Spec spec);
+                    kindName = KindName(record.SpecIndex, known, spec);
+
+                    AddKindRow(
+                        x + KindIndent,
+                        y,
+                        width - KindIndent,
+                        kindName,
+                        known ? SourceLabel(spec.Source) : null);
+
+                    y += KindRowHeight + RowGap;
+
+                    openKind = record.SpecIndex;
+                    open = true;
+                }
+
+                AddDocumentRow(x + RowIndent, y, width - RowIndent, id, record, kindName);
+                y += RowHeight + RowGap;
             }
         }
 
         /// <summary>
-        /// Forgets the countdowns for specs this machine is no longer waiting on.
+        /// Puts every document into the order the column lists them in.
+        /// </summary>
+        /// <remarks>
+        /// Kinds in catalogue order; within a kind, by team and then by number.
+        ///
+        /// The sort is on the index the record already carries, which *is* the kind's position in
+        /// the catalogue — so the kinds come out in catalogue order without the panel ever needing
+        /// the catalogue itself. It has no way to reach it and no other reason to want it.
+        ///
+        /// A document whose kind is no longer in the catalogue sorts after the ones that are, which
+        /// is where it belongs: it is real, it is listed, and there is nowhere better to put it.
+        /// </remarks>
+        private void CollectDocumentOrder(DocumentStore store)
+        {
+            _documentOrder.Clear();
+
+            for (int id = 0; id < store.Count; id++)
+                _documentOrder.Add(id);
+
+            _documentOrder.Sort(CompareDocuments);
+        }
+
+        /// <summary>
+        /// Orders two documents: kind, then team, then number.
+        /// </summary>
+        /// <remarks>
+        /// Read out of the store rather than carried alongside the ids, because a comparison cannot
+        /// see the list it is sorting and the store is the one place the answer lives.
+        /// </remarks>
+        private static int CompareDocuments(int left, int right)
+        {
+            DocumentStore store = DocumentStore.Instance;
+            if (store == null)
+                return left.CompareTo(right);
+
+            store.TryGet(left, out DocumentRecord a);
+            store.TryGet(right, out DocumentRecord b);
+
+            int byKind = a.SpecIndex.CompareTo(b.SpecIndex);
+            if (byKind != 0)
+                return byKind;
+
+            int byTeam = a.Team.CompareTo(b.Team);
+
+            return byTeam != 0 ? byTeam : a.Number.CompareTo(b.Number);
+        }
+
+        /// <summary>
+        /// Builds one document row.
+        /// </summary>
+        /// <remarks>
+        /// Nothing is derived from the row's position. The document id travels with the row, in
+        /// <see cref="DocumentRow.DocumentId"/>, because the two levels mean a row's place in the
+        /// list and the document it stands for have nothing to do with each other.
+        ///
+        /// The label repeats the kind and adds the number. The kind is on the caption above, but a
+        /// document is named by both — a round has an Excel 1 and an Excel 2, and a task asks for
+        /// one of them — and a row that said only "1" would be unreadable the moment the caption
+        /// scrolled past.
+        /// </remarks>
+        private void AddDocumentRow(
+            float x,
+            float y,
+            float width,
+            int documentId,
+            in DocumentRecord record,
+            string kindName)
+        {
+            bool mine = record.Team == _team;
+            bool fetching = _computer.IsFetching(documentId);
+
+            /* Two separate reasons a row cannot be pressed and both have to be here. The document
+             * belongs to the other side, or this side has not been handed it yet. */
+            bool selectable = mine && IsUnlocked(documentId) && !fetching;
+
+            /* Waiting beats locked when both are true at once, which can happen to a fetch already
+             * in flight. The document is on its way, and the countdown is the only sign of it there
+             * is — so that is the more useful of the two things the row could say. */
+            string label = fetching
+                ? FetchLabel(documentId, BeginTracking(documentId))
+                : $"{kindName} {record.Number}";
+
+            Color baseColour = selectable || fetching ? RowColour : RowLockedColour;
+
+            Button row = AddRow(
+                x,
+                y,
+                width,
+                label,
+                selectable ? () => Choose(documentId) : null,
+                baseColour,
+                TeamLabel(record.Team));
+
+            _documentRows.Add(new DocumentRow
+            {
+                Button = row,
+                Background = row.GetComponent<Image>(),
+                Label = row.GetComponentInChildren<TextMeshProUGUI>(),
+                DocumentId = documentId,
+                Selectable = selectable,
+                BaseColour = baseColour,
+            });
+        }
+
+        /// <summary>
+        /// Adds the row that names a kind, with where it comes from.
+        /// </summary>
+        /// <remarks>
+        /// A label rather than a button, and not the same shape as a document row: a kind cannot be
+        /// printed, so it must not look like something that could be. The round's notes say the
+        /// same about keeping the two row kinds apart in code — the colours differ, the
+        /// pressability differs, and one shared row type would have to carry a flag for each.
+        ///
+        /// The source tag is left off when the catalogue cannot name the kind. An unknown kind has
+        /// no source to show, and guessing one would put a label on the row that nothing backs.
+        /// </remarks>
+        private void AddKindRow(float x, float y, float width, string name, string sourceTag)
+        {
+            GameObject kindObject = new("Kind", typeof(RectTransform));
+            kindObject.transform.SetParent(_panelRect, worldPositionStays: false);
+
+            /* Registered for the next rebuild, unlike the labels AddLabel makes: a kind row is a row
+             * of the list and goes with the rest of them. */
+            _rows.Add(kindObject);
+
+            RectTransform rect = (RectTransform)kindObject.transform;
+            rect.anchorMin = new Vector2(0f, 1f);
+            rect.anchorMax = new Vector2(0f, 1f);
+            rect.pivot = new Vector2(0f, 1f);
+            rect.anchoredPosition = new Vector2(x, -y);
+            rect.sizeDelta = new Vector2(width, KindRowHeight);
+
+            TextMeshProUGUI label = AddText(kindObject.transform, "Label", name, KindFontSize, TextAlignmentOptions.MidlineLeft);
+            ApplyNameRect(label.rectTransform, sourceTag != null);
+
+            /* Dimmer than a document row, so it reads as a caption for what follows rather than as
+             * one more thing that could be pressed. */
+            label.color = KindColour;
+
+            if (sourceTag == null)
+                return;
+
+            TextMeshProUGUI tag = AddText(kindObject.transform, "Tag", sourceTag, KindFontSize, TextAlignmentOptions.MidlineRight);
+            ApplyTagRect(tag.rectTransform);
+            tag.color = KindColour;
+        }
+
+        /// <summary>
+        /// What to call a kind, including when the catalogue cannot name it.
+        /// </summary>
+        /// <remarks>
+        /// A document whose kind has been deleted from the catalogue is still a real document and
+        /// may be in somebody's hands, so it is listed under a stand-in name rather than dropped.
+        /// Losing a document silently is the worst way for this column to be wrong, because nothing
+        /// about it looks wrong.
+        /// </remarks>
+        private static string KindName(int specIndex, bool known, in DocumentCatalogue.Spec spec) =>
+            known && !string.IsNullOrEmpty(spec.DisplayName) ? spec.DisplayName : $"种类 {specIndex}";
+
+        /// <summary>
+        /// Which side a document belongs to, as the tag at the end of its row.
+        /// </summary>
+        /// <remarks>
+        /// Only the two teams the round has names for are given letters. Anything else is printed
+        /// as the number it is: a team nobody has defined is not team A, and guessing would put a
+        /// document on the wrong side of a rule the server is enforcing.
+        /// </remarks>
+        private static string TeamLabel(int team) => team switch
+        {
+            0 => "A",
+            1 => "B",
+            _ => team.ToString(),
+        };
+
+        /// <summary>
+        /// Where a kind comes from, as the tag at the end of its row.
+        /// </summary>
+        /// <remarks>
+        /// Anything that is not Internet is filed, rather than only the value that means filing. A
+        /// source the catalogue does not define is a data-entry mistake, and the harmless reading
+        /// of it is the one to take.
+        /// </remarks>
+        private static string SourceLabel(int source) =>
+            (DocumentSource)source == DocumentSource.Internet ? "Internet" : "后台";
+
+        /// <summary>
+        /// Whether this player's side has been handed a document.
+        /// </summary>
+        /// <remarks>
+        /// A missing component means nothing is locked, which is what the server does with the same
+        /// answer: a scene that predates unlocks offers everything rather than nothing. The two
+        /// failures are not symmetric, and the cheap one is the one to prefer.
+        ///
+        /// The server asks the same question again when a document is actually sent, because this
+        /// answer decides only whether a row can be pressed.
+        /// </remarks>
+        private static bool IsUnlocked(int documentId)
+        {
+            DocumentUnlocks unlocks = DocumentUnlocks.Instance;
+            return unlocks == null || unlocks.IsUnlocked(documentId);
+        }
+
+        /// <summary>
+        /// Forgets the countdowns for documents this machine is no longer waiting on.
         /// </summary>
         /// <remarks>
         /// Entries are dropped, not the whole dictionary: a countdown has to survive a rebuild
         /// caused by some other row starting or landing. The keys are copied out before the
         /// removals, because a dictionary cannot be changed while it is being walked.
         /// </remarks>
-        private void PruneFetchClocks(DocumentCatalogue catalogue)
+        private void PruneFetchClocks()
         {
             if (_fetchStartedAt.Count == 0)
                 return;
@@ -537,12 +892,12 @@ namespace Overworked.UI
 
             foreach (KeyValuePair<int, float> entry in _fetchStartedAt)
             {
-                if (entry.Key >= catalogue.Count || !_computer.IsFetching(entry.Key))
+                if (!_computer.IsFetching(entry.Key))
                     _pruneBuffer.Add(entry.Key);
             }
 
-            foreach (int specIndex in _pruneBuffer)
-                _fetchStartedAt.Remove(specIndex);
+            foreach (int documentId in _pruneBuffer)
+                _fetchStartedAt.Remove(documentId);
 
             _pruneBuffer.Clear();
         }
@@ -550,13 +905,13 @@ namespace Overworked.UI
         /// <summary>
         /// Returns when this client began counting a fetch down, starting the clock if it is new.
         /// </summary>
-        private float BeginTracking(int specIndex)
+        private float BeginTracking(int documentId)
         {
-            if (_fetchStartedAt.TryGetValue(specIndex, out float started))
+            if (_fetchStartedAt.TryGetValue(documentId, out float started))
                 return started;
 
             started = Time.unscaledTime;
-            _fetchStartedAt[specIndex] = started;
+            _fetchStartedAt[documentId] = started;
             return started;
         }
 
@@ -570,16 +925,16 @@ namespace Overworked.UI
 
             for (int i = 0; i < _documentRows.Count; i++)
             {
-                SpecRow row = _documentRows[i];
+                DocumentRow row = _documentRows[i];
 
                 if (row.Label == null || row.Selectable)
                     continue;
-                if (!_fetchStartedAt.TryGetValue(row.SpecIndex, out float started))
+                if (!_fetchStartedAt.TryGetValue(row.DocumentId, out float started))
                     continue;
 
                 /* Compared before it is assigned: TMP rebuilds its mesh on every set, and this
                  * runs every frame the window is open. */
-                string text = FetchLabel(row.SpecIndex, started);
+                string text = FetchLabel(row.DocumentId, started);
                 if (row.Label.text != text)
                     row.Label.text = text;
             }
@@ -595,9 +950,9 @@ namespace Overworked.UI
         /// and the state it is in for one frame in every other case, so the wording has to be true
         /// of the long one without being wrong about the short one.
         /// </remarks>
-        private string FetchLabel(int specIndex, float started)
+        private string FetchLabel(int documentId, float started)
         {
-            float remaining = Mathf.Max(0f, FetchSeconds(specIndex) - (Time.unscaledTime - started));
+            float remaining = Mathf.Max(0f, FetchSeconds(documentId) - (Time.unscaledTime - started));
 
             return remaining <= 0f
                 ? "下载完成,等待打印机…"
@@ -605,33 +960,38 @@ namespace Overworked.UI
         }
 
         /// <summary>
-        /// How long a spec takes to acquire, or 0 when there is no such spec.
+        /// How long a document takes to acquire, or 0 when this client cannot name it.
         /// </summary>
-        private float FetchSeconds(int specIndex)
+        private static float FetchSeconds(int documentId)
         {
-            DocumentCatalogue catalogue = _computer != null ? _computer.Catalogue : null;
-            if (catalogue == null || !catalogue.TryGet(specIndex, out DocumentCatalogue.Spec spec))
-                return 0f;
-
-            return spec.FetchSeconds;
+            DocumentStore store = DocumentStore.Instance;
+            return store != null && store.TryGetSpec(documentId, out DocumentCatalogue.Spec spec)
+                ? spec.FetchSeconds
+                : 0f;
         }
 
         /// <summary>
-        /// Client: a fetch started or landed, so the document column has changed.
+        /// Client: something changed what the document column may offer, so it is rebuilt.
         /// </summary>
         /// <remarks>
+        /// Two events land here and they want the same work: a fetch starting or landing, and a
+        /// document being handed over. Neither is frequent and both are the same kind of news, so
+        /// is one handler rather than two that would have to be kept agreeing.
+        ///
         /// The selection is re-applied rather than left to survive, because rebuilding the rows
         /// throws the highlight away with them. Asking for it again also drops a selection that has
-        /// stopped being legal — which is the row that has just started waiting — so the lit row
-        /// and the row a printer press would send are always the same one.
+        /// stopped being legal — the row that has just started waiting, or one that has been
+        /// re-locked by a reset — so the lit row and the row a printer press would send are always
+        /// the same one. That is the bug this line exists for; without it the panel redraws with
+        /// nothing lit, and the next printer press does nothing at all.
         /// </remarks>
-        private void OnFetchingChanged()
+        private void OnOfferChanged()
         {
             if (!_open)
                 return;
 
             Rebuild();
-            Choose(_chosenSpec);
+            Choose(_chosenDocument);
         }
 
         /// <summary>
@@ -679,19 +1039,41 @@ namespace Overworked.UI
         /// <summary>
         /// Adds one list row, optionally clickable.
         /// </summary>
-        private Button AddRow(float x, float y, float width, string label, System.Action onClick)
+        /// <param name="onClick">
+        /// What pressing it does, or null when the row cannot be pressed — a message, or a document
+        /// that is not on offer.
+        /// </param>
+        /// <param name="background">
+        /// Background colour, or null for the ordinary one. Used to draw a row this player cannot
+        /// have darker than the rest without making it unreadable.
+        /// </param>
+        /// <param name="tag">
+        /// Text for the right-hand end of the row — a team, or where a kind comes from — or null
+        /// for a row that has nothing to put there.
+        /// </param>
+        private Button AddRow(
+            float x,
+            float y,
+            float width,
+            string label,
+            System.Action onClick,
+            Color? background = null,
+            string tag = null)
         {
-            Button button = CreateButton("Row", x, y, width, RowHeight, label, RowFontSize, onClick);
+            Button button = CreateButton("Row", x, y, width, RowHeight, label, RowFontSize, onClick, tag);
 
             /* Registered for the next rebuild. Built here rather than inside CreateButton so that
              * the window's permanent parts, which share that method, are not swept up with them. */
             _rows.Add(button.gameObject);
 
+            Image image = button.GetComponent<Image>();
+            image.color = background ?? RowColour;
+
             if (onClick == null)
             {
-                /* A row that is only a message. Its background would still swallow clicks that
+                /* A row that cannot be pressed. Its background would still swallow clicks that
                  * should reach nothing, so it is not a raycast target at all. */
-                button.GetComponent<Image>().raycastTarget = false;
+                image.raycastTarget = false;
                 button.interactable = false;
             }
 
@@ -709,7 +1091,8 @@ namespace Overworked.UI
             float height,
             string label,
             float fontSize,
-            System.Action onClick)
+            System.Action onClick,
+            string tag = null)
         {
             GameObject buttonObject = new(name, typeof(RectTransform));
             buttonObject.transform.SetParent(_panelRect, worldPositionStays: false);
@@ -743,27 +1126,89 @@ namespace Overworked.UI
             if (onClick != null)
                 button.onClick.AddListener(() => onClick());
 
-            AddLabelTo(buttonObject.transform, label, fontSize);
+            /* The name first and the tag second, and that order matters: a document row finds its
+             * own name text with GetComponentInChildren, which returns the first one in the
+             * hierarchy. Adding the tag first would hand every row its tag as its label, and the
+             * countdown would be written over the team letter. */
+            AddLabelTo(buttonObject.transform, label, fontSize, tag != null);
+
+            if (tag != null)
+                AddTagTo(buttonObject.transform, tag, fontSize);
 
             return button;
         }
 
         /// <summary>
-        /// Adds a text child filling a button.
+        /// Adds the name text of a row.
         /// </summary>
-        private void AddLabelTo(Transform parent, string text, float fontSize)
+        /// <param name="roomForTag">
+        /// True when the row also carries a tag, which the name has to stop short of.
+        /// </param>
+        private void AddLabelTo(Transform parent, string text, float fontSize, bool roomForTag)
         {
-            GameObject textObject = new("Label", typeof(RectTransform));
+            TextMeshProUGUI label = AddText(parent, "Label", text, fontSize, TextAlignmentOptions.MidlineLeft);
+            ApplyNameRect(label.rectTransform, roomForTag);
+        }
+
+        /// <summary>
+        /// Adds the tag that ends a row.
+        /// </summary>
+        private void AddTagTo(Transform parent, string text, float fontSize)
+        {
+            TextMeshProUGUI tag = AddText(parent, "Tag", text, fontSize, TextAlignmentOptions.MidlineRight);
+            ApplyTagRect(tag.rectTransform);
+        }
+
+        /// <summary>
+        /// Creates a text under a parent.
+        /// </summary>
+        /// <remarks>
+        /// The rectangle is left to the caller, because a row's name and its tag are placed against
+        /// each other and only the pair knows how much room each of them gets.
+        /// </remarks>
+        private TextMeshProUGUI AddText(
+            Transform parent,
+            string name,
+            string text,
+            float fontSize,
+            TextAlignmentOptions alignment)
+        {
+            GameObject textObject = new(name, typeof(RectTransform));
             textObject.transform.SetParent(parent, worldPositionStays: false);
 
-            RectTransform rect = (RectTransform)textObject.transform;
+            TextMeshProUGUI label = textObject.AddComponent<TextMeshProUGUI>();
+            ApplyText(label, text, fontSize, alignment);
+
+            return label;
+        }
+
+        /// <summary>
+        /// Places the name of a row, stopping short of the tag when the row has one.
+        /// </summary>
+        private static void ApplyNameRect(RectTransform rect, bool roomForTag)
+        {
             rect.anchorMin = Vector2.zero;
             rect.anchorMax = Vector2.one;
             rect.pivot = new Vector2(0.5f, 0.5f);
-            rect.offsetMin = new Vector2(14f, 0f);
-            rect.offsetMax = new Vector2(-14f, 0f);
+            rect.offsetMin = new Vector2(LabelInset, 0f);
+            rect.offsetMax = new Vector2(roomForTag ? -(TagWidth + TagInset) : -LabelInset, 0f);
+        }
 
-            ApplyText(textObject.AddComponent<TextMeshProUGUI>(), text, fontSize, TextAlignmentOptions.MidlineLeft);
+        /// <summary>
+        /// Places the tag at the end of a row, against its right edge.
+        /// </summary>
+        /// <remarks>
+        /// Anchored rather than positioned, so it stays against the right edge whatever width the
+        /// row is given. Both offsets are negative because, with the anchors stretched across the
+        /// row, they are measured inwards from that edge.
+        /// </remarks>
+        private static void ApplyTagRect(RectTransform rect)
+        {
+            rect.anchorMin = Vector2.zero;
+            rect.anchorMax = Vector2.one;
+            rect.pivot = new Vector2(0.5f, 0.5f);
+            rect.offsetMin = new Vector2(-(TagWidth + TagInset), 0f);
+            rect.offsetMax = new Vector2(-TagInset, 0f);
         }
 
         /// <summary>
@@ -816,33 +1261,33 @@ namespace Overworked.UI
         /// put it somewhere the next printer press still sends from — and what it would send is a
         /// second fetch of a document already on its way, at full price.
         /// </remarks>
-        private void Choose(int index)
+        private void Choose(int documentId)
         {
-            _chosenSpec = -1;
+            _chosenDocument = -1;
 
             for (int i = 0; i < _documentRows.Count; i++)
             {
-                SpecRow row = _documentRows[i];
+                DocumentRow row = _documentRows[i];
                 if (row.Background == null)
                     continue;
 
-                bool chosen = row.Selectable && row.SpecIndex == index;
+                bool chosen = row.Selectable && row.DocumentId == documentId;
                 if (chosen)
-                    _chosenSpec = index;
+                    _chosenDocument = documentId;
 
-                row.Background.color = chosen ? RowChosenColour : RowColour;
+                row.Background.color = chosen ? RowChosenColour : row.BaseColour;
             }
         }
 
         /// <summary>
         /// The first row that is on offer, or -1 when none is.
         /// </summary>
-        private int FirstSelectableSpec()
+        private int FirstSelectableDocument()
         {
             for (int i = 0; i < _documentRows.Count; i++)
             {
                 if (_documentRows[i].Selectable)
-                    return _documentRows[i].SpecIndex;
+                    return _documentRows[i].DocumentId;
             }
 
             return -1;
@@ -869,14 +1314,14 @@ namespace Overworked.UI
         {
             if (_interaction == null || _computer == null || printer == null)
                 return;
-            if (_chosenSpec < 0)
+            if (_chosenDocument < 0)
                 return;
 
-            _interaction.RequestDocument(_computer.NetworkObject, printer.NetworkObject, _chosenSpec);
+            _interaction.RequestDocument(_computer.NetworkObject, printer.NetworkObject, _chosenDocument);
 
-            if (FetchSeconds(_chosenSpec) > 0f)
+            if (FetchSeconds(_chosenDocument) > 0f)
             {
-                MarkWaiting(_chosenSpec);
+                MarkWaiting(_chosenDocument);
                 return;
             }
 
@@ -897,27 +1342,28 @@ namespace Overworked.UI
         /// nothing, which leaves the row counting down to zero and sitting there — so the repair
         /// for that is closing and reopening the window, not a timer here.
         /// </remarks>
-        private void MarkWaiting(int specIndex)
+        private void MarkWaiting(int documentId)
         {
             for (int i = 0; i < _documentRows.Count; i++)
             {
-                SpecRow row = _documentRows[i];
-                if (row.SpecIndex != specIndex || !row.Selectable)
+                DocumentRow row = _documentRows[i];
+                if (row.DocumentId != documentId || !row.Selectable)
                     continue;
 
                 row.Selectable = false;
 
                 /* Back to the unlit colour, the same as any other row that is waiting: the
                  * highlight means "this is what a press would send", and a press can no longer
-                 * send it. */
+                 * send it. Read off the row rather than named here, so a waiting row and a locked
+                 * one cannot end up disagreeing about what "unlit" means. */
                 if (row.Background != null)
-                    row.Background.color = RowColour;
+                    row.Background.color = row.BaseColour;
 
                 if (row.Button != null)
                     row.Button.interactable = false;
 
                 if (row.Label != null)
-                    row.Label.text = FetchLabel(specIndex, BeginTracking(specIndex));
+                    row.Label.text = FetchLabel(documentId, BeginTracking(documentId));
 
                 return;
             }
@@ -949,12 +1395,6 @@ namespace Overworked.UI
         }
 
         // ------------------------------------------------------------------ helpers
-
-        /// <summary>
-        /// A readable name for where a document comes from.
-        /// </summary>
-        private static string SourceName(int source) =>
-            (DocumentSource)source == DocumentSource.Internet ? "Internet" : "后台";
 
         /// <summary>
         /// Orders printers by the name they are listed under.

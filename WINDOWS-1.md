@@ -269,3 +269,68 @@ W2 和 W3 都撞上了同一个缺口:**`Printer` 有 `Output` 却没有公开�
 2. `Printer.Queue` 不存在 —— W2 已经加了。
 
 补完之后全量编译:**0 error / 3 warning**(全是 CS0114 基线)。
+
+---
+---
+
+# 第三轮 · 控制台(W1)
+
+**状态**:代码完成,离线编译 **0 error / 3 warning**(3 条全是 CS0114 基线)。
+**运行时未验证** —— 没跑过 MPPM。
+**文件**:`Assets/Scripts/Dev/DevConsole.cs`(唯一一个)。场景和 prefab 一个字没碰。
+**不需要你做任何编辑器操作** —— 控制台已经在场景里了。
+
+## 加了什么
+
+| 命令 | 作用 |
+|---|---|
+| `unlock <spec>` | 解锁一条文档,打印它的名字、它在解锁表里的序号、以及一共开了几条 |
+| `unlock reset` | `ServerResetUnlocks()`,回到 `UnlockedAtStart` 的状态 |
+| `unlocks` | 列出**每一条** spec 和它的状态(✓ / ·),已解锁的额外标 `starts open` |
+
+Tab 补全:第一个词补 `unlock` / `unlocks`;`unlock` 后面补 `reset` + 目录里**所有** spec 索引,
+现从 `DocumentCatalogue` 取。`help` 里加了三行。
+
+## 我自己决定的
+
+**① `unlocks` 给每一行都标 `starts open`。** 验收第 1 条要区分「播种对了」和「有人手工开过」——
+两者在面板上长得一样。多这一列,第 1 条和第 9 条一眼就能判。
+
+**② `unlock` 的两种失败分开报。** `DocumentUnlocks.ServerUnlock` 对「索引不存在」和「已经开着」
+都返回 false,那对调用方是对的,但控制台前面站着一个人,答「什么也没发生」等于没答。
+所以我在调用前先查 `TryGet` 和 `IsUnlocked`,分别说「no document spec N」和「already open」。
+
+**③ `ServerUnlock` 仍然返回 false 时,报的是原因不是拒绝。** 走到那一行只有一种可能:
+控制台看得到这条 spec,而组件说它没开 —— 也就是**组件读的是另一个目录,或者没填目录**。
+所以那句话直接说「check that DocumentUnlocks has the same catalogue assigned」,
+而不是「refused」。否则读的人会去找一条不存在的规则。
+
+**④ `unlocks` 不是服务端命令。** 它只读,和 `docs` / `printers` 一样。
+客户端和服务端看到的解锁集不一致,正是值得从客户端问一句的事。
+
+**⑤ 没有 `DocumentUnlocks` 时 `unlocks` 照常列,但先说一句。** 按 P0 的约定,组件不在 =
+没有任何锁,所以每一行都是 ✓ —— 那和「目录里全都勾了 UnlockedAtStart」长得一模一样。
+先说一句「no DocumentUnlocks in the scene; nothing is locked」,然后再列,两种情况才分得开。
+
+**⑥ 没给 `document` 加解锁检查**,按你说的。它产出的是「某人已经有了这份」,是调试工具的本分。
+
+## 我认为可能不对的地方
+
+- **`✓` 和 `·` 能不能在 IMGUI 里画出来,我没法验证。** 选这两个是因为 · 是 Latin-1、
+  ✓ 是最老的 dingbat 之一,拿到字形的概率最高 —— 但**默认 GUI 字体是 Unity 内置的 Arial,
+  它里面没有 U+2713**,要靠动态字体的系统回退。如果跑起来看到的是方框,告诉我,
+  换成 `*` / `-` 是一行的事。
+- **`unlock` 只在服务端能跑。** 客户端敲它会得到「this command runs on the server only」。
+  和 `document` / `queue` 一致。
+- **`unlock reset` 会清空再播种**,而 `ServerResetUnlocks` 的每一次 Add 都会触发一次
+  `UnlockedChanged` —— 面板会在同一帧里重建好几次。P0 的注释里写了这件事、认为不值得为它加机制。
+  控制台这边没有额外放大这个问题。
+
+## 验收怎么用
+
+```
+unlocks          → 只有勾了 Unlocked At Start 的那几条是 ✓,其余是 ·
+unlock 2         → 那一行变 ✓,打印「unlocked spec 2 '…'; 3 of 4 open.」
+unlock reset     → 回到第一步的状态
+```
+

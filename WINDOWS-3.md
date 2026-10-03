@@ -211,3 +211,83 @@ queue 0 0       → queued document 0 (#1) on 'Printer'; queue 1/5.
 W1 的交接里写着「队列里没有别的途径能进文档 …… 建议优先 W3」—— 它知道机器不可测,
 但没意识到那等于接口还没写完。`WINDOWS-DATA.md` 的「已冻结接口」那张表可以加一行 `Printer.Queue`,
 下一轮就不会有人再问第二遍。
+---
+
+# 第三轮 · 收尾
+
+**状态**:三件事都做完,离线编译 **0 error / 3 warning**(CS0114 基线)。
+**运行时未验证** —— MPPM 没跑过,那是你的活。
+**文件**:`UI/DebugHud.cs`、`Containers/ContainerEntry.cs`、`Stations/Printer.cs`(一行注释)、
+`Interaction/PlayerInteraction.cs`、`Dev/DevConsole.cs`。场景和 prefab 一个字没碰,**编辑器里不需要你做任何事**。
+
+## 1. DebugHud:文档报身份,不再报个数
+
+`数据 x2` → `Excel 1 x1, Excel 2 x1`。
+
+- 按**文档 id** 分组(新加一条 `_documentTally`,和原来那条按 payload 的分开):
+  同一份文档塞两次仍显示 `x2`,但**同种类的两份不同文档不会被并成一个数** ——
+  需求点名的是「某一份」,把它们并起来等于没报。
+- 名字走 `DocumentStore.TryGetSpec`。拿不到时报 `种类 {SpecIndex} #{Number}`,连记录都拿不到时报 `文档 {id}`。
+  两级兜底,因为有两种「知道得比全部少」:种类被从资源里删了(编号还在),和 store 还没同步(什么都没有)。
+  哪一种都不该让这一条消失 —— 少报一件比标签难看糟得多。
+
+**我没做的事,先说清楚:队伍没显示。** 提示词给的格式是 `Excel 1 ×1`,我照做了。
+代价是两队各有一份 Excel 1 进了同一台机器时,那一行会是 `Excel 1 x1, Excel 1 x1` ——
+看着像渲染错了,其实是两份不同的文档。要加队伍标签(`Excel 1 A x1`)说一声,三行的事。
+
+## 2. `ContainerEntry.OwnerClientId` 删掉了
+
+- 字段、`ForEntity` / `ForData` 上的 `ownerClientId` 参数一起删(确认过没有任何调用点传它)
+- `Printer.cs` 里那句注释改写,留下它真正在说的事实:纸和墨是共享池,谁喂进来的不影响任何事;
+  「哪一边要印」属于**队列里的那份文档**,不属于原料
+- **顺带改了一处注释**(超出提示词的字面范围):`ContainerEntryKind.Data` 的摘要还写着
+  「Not implemented yet; the id will point at the document store once that exists」——
+  这句话现在是假的,而这一轮做的正是它。留着它,下一个读的人会以为 Data 条目还没接线。
+  你要是希望这轮严格只动字段,这处可以回退。
+
+顺带一提:`CONSTRAINTS.md` 第二节里冻结的 `ContainerEntry` **本来就没有这个字段** ——
+所以这次删除是让代码对上了那份接口表,不是改接口。
+
+## 3. `team <n>`
+
+- `PlayerInteraction`:`private const int TeamThisRound = 0` → `readonly SyncVar<int> _team = new(0)`,
+  `public int Team => _team.Value`(名字和类型都没动,W2 的面板在读它),
+  新增 `[Server] public void ServerSetTeam(int team)`
+- `ServerBeginFetch(..., Team)` 现在传复制值,不是常量
+- 控制台加 `team <n>`:服务端限定,对本机玩家调用,然后打印确认
+
+三处我自己定的:
+
+1. **`ServerSetTeam` 标了 `[Server]`**,而 `NetworkGrabbable` 那几个 `ServerSet*` 故意没标。
+   两者不矛盾,原因不同:那几个要在「实例化之后、Spawn 之前」被调用,而 `[Server]` 编译成
+   `IsServerInitialized` 检查,那个窗口里它是 false;玩家对象不一样,有人问它队伍的时候它早就 spawn 了。
+2. **确认信息里写了下一步该敲什么**:`team 1. The panel filters on this; pass it to 'document' to name one for this side.`
+   因为**队伍不会自己传播** —— 面板读它,而 `document` 收的是参数。
+3. **`document` 的默认队伍我没改,仍是写死的 0。** 于是 `team 1` 之后敲 `document 0`,造出来的还是队伍 0 的文档。
+   这不是 bug,但反直觉,而且 W1 那句注释(「和电脑面板一样先硬编码 0」)现在只对了一半 ——
+   面板走的是玩家队伍,**是我这轮让两者不一样的**。要不要把 `document` 的默认也改成玩家队伍,你定;
+   这一轮提示词只给了三件事,我没有自己扩。
+
+## 我认为可能不对的
+
+- **`_team` 真的会过网这件事,离线编译证明不了。** 提示词自己也写了:`dotnet build` **不跑编织器**,
+  `SyncVar` 的序列化是 Unity 里生成的。这条要等你切焦点编一次才算数。
+- **只有主机能改队伍。** 控制台是服务端专属,客户端敲会被拒 —— 所以 MPPM 里客户端那个玩家
+  永远停在队伍 0,除非以后加一条 RPC。验收第 9 条(自己变队伍 1、面板翻过来)主机上能做,
+  「让**对手**变队伍」这轮做不到。
+- **`team` 没有任何范围检查**,`team -5` 也收,面板会按 -5 去比。控制台是开发工具,我没替使用者挡;
+  真把队伍当玩法的时候才需要。
+
+## 关于验收第 14 条(`unlocks` 里的 `✓`)—— 我先查了,不用等你看见方框
+
+两件事,一件是查出来的,一件是查不出来的:
+
+1. **`simhei.ttf` 里没有 U+2713(✓)。** 我解了 `Assets/Font/simhei.ttf` 的 cmap 表核实过:
+   `A`、`·`、`×`、`√`(U+221A)都有,`✓`(U+2713)、`✔`(U+2714)、`•`(U+2022)都是 0 号字形 —— 缺字。
+2. **但控制台根本不用 simhei。** 它是 IMGUI 画的(`OnGUI`),用的是 Unity 内置的那套 GUI 字体;
+   simhei 是 TMP 字体,归 DebugHud 和电脑面板。所以**「simhei 没有」并不能推出「控制台会出方框」**,
+   我没有条件离线验证内置字体有没有这个字形(它在编辑器里不落地成 ttf)。**这条要你跑一次才知道。**
+
+如果跑出来确实是方框,我建议用 **`√`(U+221A)而不是提示词写的 `[x]`**:`√` 单字符宽,
+而 `unlocks` 的标记是每行**第一个字符**,换成三字符的 `[x]` 会把整个列表推歪两格;
+`√` 是中文里惯用的对勾,而且我已经确认它在 simhei 里有字形。改一行,说一声就改。

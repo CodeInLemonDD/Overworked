@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using FishNet.Connection;
 using FishNet.Object;
+using FishNet.Object.Synchronizing;
 using FishNet.Transporting;
 using FishNet.Utility.Template;
 using Overworked.Stations;
@@ -208,16 +209,38 @@ namespace Overworked.Interaction
         private float _stationLongPressSeconds = 0.3f;
 
         /// <summary>
-        /// The team every document is stamped with this round.
+        /// Which team this player is on. Team A until somebody says otherwise.
         /// </summary>
         /// <remarks>
-        /// Hard-coded, and deliberately not a serialized field: there is no team assignment yet, so
-        /// anything configurable here would be a value with nothing to set it. It is a named
-        /// constant rather than a bare 0 so that the round it stops being true is greppable — every
-        /// player is on team A until the 2v2 split arrives, and the document's team is the only
-        /// thing in this file that cares.
+        /// Replicated, because the server is the only side that may decide it and everything else
+        /// has to agree: a team read anywhere but the server is a client telling the server who it
+        /// is, and the panel tells its own documents from the other side's by comparing against
+        /// this.
+        ///
+        /// It was a constant until this round, and a constant could not be tested at all — with
+        /// every player on one team, "number documents per team" and "refuse the other team" had
+        /// nothing to exercise them. **This is a test seam, not match making**: the console's
+        /// <c>team</c> command is the only thing that moves it, and assigning teams for real is a
+        /// later round, with a decision to make about documents a player is already holding.
         /// </remarks>
-        private const int TeamThisRound = 0;
+        private readonly SyncVar<int> _team = new(0);
+
+        /// <summary>
+        /// Which team this player is on.
+        /// </summary>
+        public int Team => _team.Value;
+
+        /// <summary>
+        /// Server: puts this player on a team.
+        /// </summary>
+        /// <remarks>
+        /// Nothing in the game calls this yet; the console does, which is the point of it. Marked
+        /// [Server] rather than guarded by hand like the <c>ServerSet*</c> family on
+        /// NetworkGrabbable: those have to be callable between instantiating and spawning, and a
+        /// player object is long since spawned by the time anyone asks about its team.
+        /// </remarks>
+        [Server]
+        public void ServerSetTeam(int team) => _team.Value = team;
 
         /// <summary>
         /// Per-object copy of the assigned action asset. See PlayerMovementPrediction for
@@ -1159,14 +1182,18 @@ namespace Overworked.Interaction
         }
 
         /// <summary>
-        /// Client: asks the server to create the chosen document and queue it on a printer.
+        /// Client: asks the server to send the chosen document to a printer.
         /// </summary>
         /// <remarks>
         /// A plain wrapper rather than the RPC itself, because the caller is the panel and an RPC
         /// is private to the behaviour it is declared on. Same shape as the pair above.
+        ///
+        /// Takes a **document id**, not a kind. What gets printed is one specific document — this
+        /// spreadsheet — and two teams hold two different spreadsheets that happen to share a
+        /// number.
         /// </remarks>
-        public void RequestDocument(NetworkObject computer, NetworkObject printer, int specIndex) =>
-            CmdRequestDocument(computer, printer, specIndex);
+        public void RequestDocument(NetworkObject computer, NetworkObject printer, int documentId) =>
+            CmdRequestDocument(computer, printer, documentId);
 
         /// <summary>
         /// Server: hands the chosen document to the machine it was ordered for.
@@ -1177,17 +1204,17 @@ namespace Overworked.Interaction
         /// the walk from it to the printer is the cost the game charges for a document — so
         /// checking against the printer would forbid the only thing this station does.
         ///
-        /// Everything past the range check belongs to the machine. Whether the document exists
-        /// yet, how long it takes to arrive and whether there is room for it are one question —
-        /// how this computer acquires a document — and it is answered in one place so that a
-        /// document from the filing cabinet and one from the Internet cannot end up with two
-        /// different sets of rules.
+        /// Everything past the range check belongs to the machine. Whether the document is this
+        /// team's, whether it has been handed over, how long it takes to arrive and whether there
+        /// is room for it are one question — how this computer acquires a document — and it is
+        /// answered in one place so that a filing-cabinet document and one from the Internet
+        /// cannot end up with two different sets of rules.
         /// </remarks>
         [ServerRpc]
         private void CmdRequestDocument(
             NetworkObject computerObject,
             NetworkObject printerObject,
-            int specIndex,
+            int documentId,
             NetworkConnection caller = null)
         {
             if (computerObject == null || printerObject == null || caller == null || !caller.IsActive)
@@ -1213,7 +1240,7 @@ namespace Overworked.Interaction
             if (to.sqrMagnitude > reach * reach)
                 return;
 
-            computer.ServerBeginFetch(specIndex, printer, TeamThisRound);
+            computer.ServerBeginFetch(documentId, printer, Team);
         }
 
     }

@@ -13,7 +13,19 @@ MonoBehaviour:
   m_Name: DocumentCatalogue
   m_EditorClassIdentifier: Assembly-CSharp::Overworked.Documents.DocumentCatalogue
   _specs:
-  - DisplayName: 0
+  - DisplayName: "\u5408\u540C"
     PayloadIndex: 2
     Source: 0
     FetchSeconds: 0
+  - DisplayName: Excel
+    PayloadIndex: 2
+    Source: 0
+    FetchSeconds: 0
+  - DisplayName: "\u56FE\u7247"
+    PayloadIndex: 2
+    Source: 1
+    FetchSeconds: 4
+  - DisplayName: "\u6587\u6863"
+    PayloadIndex: 2
+    Source: 1
+    FetchSeconds: 5

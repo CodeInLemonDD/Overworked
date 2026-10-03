@@ -18,9 +18,14 @@ namespace Overworked.Containers
         Entity = 1,
 
         /// <summary>
-        /// A virtual thing: a document's data. Not implemented yet; the id will point at
-        /// the document store once that exists.
+        /// A document: <c>DataId</c> is an id in <c>DocumentStore</c>, which is where its
+        /// kind, number and team live.
         /// </summary>
+        /// <remarks>
+        /// Materials are entities and documents are data, with no overlap — an entity carrying a
+        /// number as well would give one document two spellings, and every module would have to
+        /// agree on which one it meant.
+        /// </remarks>
         Data = 2,
     }
 
@@ -58,41 +63,23 @@ namespace Overworked.Containers
         public int DataId;
 
         /// <summary>
-        /// Who this entry belongs to, or -1 when nobody in particular.
-        /// </summary>
-        /// <remarks>
-        /// Unused today, and deliberately so. Raw materials have no owner — paper and ink are a
-        /// shared pool, and who fed them in changes nothing — so every entry written right now
-        /// passes -1.
-        ///
-        /// It was added for a printer that queued work per owner. That design was dropped once
-        /// materials became shared, so this is waiting on the entries that genuinely need an
-        /// origin: a document queued for printing belongs to a faction rather than to the
-        /// machine. If the document store ends up carrying that itself, delete this field
-        /// rather than leave one that nothing explains.
-        /// </remarks>
-        public int OwnerClientId;
-
-        /// <summary>
         /// Builds an entry for a physical item.
         /// </summary>
-        public static ContainerEntry ForEntity(int payloadIndex, int ownerClientId = -1) => new()
+        public static ContainerEntry ForEntity(int payloadIndex) => new()
         {
             Kind = (byte)ContainerEntryKind.Entity,
             PayloadIndex = payloadIndex,
             DataId = -1,
-            OwnerClientId = ownerClientId,
         };
 
         /// <summary>
         /// Builds an entry for a document's data.
         /// </summary>
-        public static ContainerEntry ForData(int dataId, int ownerClientId = -1) => new()
+        public static ContainerEntry ForData(int dataId) => new()
         {
             Kind = (byte)ContainerEntryKind.Data,
             PayloadIndex = -1,
             DataId = dataId,
-            OwnerClientId = ownerClientId,
         };
 
         /// <summary>
