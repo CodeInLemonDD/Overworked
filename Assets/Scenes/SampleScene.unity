@@ -1425,6 +1425,7 @@ GameObject:
   - component: {fileID: 1209147356}
   - component: {fileID: 1209147355}
   - component: {fileID: 1209147354}
+  - component: {fileID: 1209147357}
   m_Layer: 0
   m_Name: DocumentStore
   m_TagString: Untagged
@@ -1447,6 +1448,7 @@ MonoBehaviour:
   _componentIndexCache: 255
   _addedNetworkObject: {fileID: 1209147355}
   _networkObjectCache: {fileID: 0}
+  _catalogue: {fileID: 11400000, guid: 1fffe73587503434c87853465b7cd05a, type: 2}
 --- !u!114 &1209147355
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -1519,6 +1521,21 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &1209147357
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1209147353}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 7f8d9f8e8bfd4b3eadb3bb8fdad1908e, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Overworked.Documents.DocumentUnlocks
+  _componentIndexCache: 255
+  _addedNetworkObject: {fileID: 1209147355}
+  _networkObjectCache: {fileID: 0}
 --- !u!1 &1260275073
 GameObject:
   m_ObjectHideFlags: 0
