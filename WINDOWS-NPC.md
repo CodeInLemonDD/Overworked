@@ -93,6 +93,20 @@ B 队的合同 1 —— 那这单算谁的?
 - 控制台的 `team <n>` **留着**当覆盖手段
 - **不做**:重连保持、观战、队伍 UI、准备阶段
 
+### ④ 回合:限时,分高者胜
+
+- **场上两个客户**,各自一条需求
+- **需求按顺序递增**,不是随机:第 1~3 条要「1 合同 + 1 Excel」,第 4~8 条要「1 合同 + 2 Excel」,
+  第 9 条起要「2 合同 + 3 Excel + 1 文档」…… **具体数字在资源里填,这里只是形状**
+- **交成一条 10 分**,先交的那队拿,**另一队白做**
+- **限时**,时间到分高者胜
+
+> **这推翻了「先到配额」那个设想。** `ScoreBoard` 里是**一个钟**,不是一个目标分 ——
+> 「先到 N 分」和「时间内分最高」是两种不同的游戏,后者要有一个服务端权威的倒计时。
+
+> **一个平衡上要留意的地方**(现在不用处理):抢单是赢家通吃,所以一路抢输的那队可能**零分**,
+> 而且没有追赶机制。调参的时候再说。
+
 ---
 
 ## 三、要抽出来的东西(第三次了)
@@ -163,6 +177,37 @@ public class RequestBoard : NetworkBehaviour
 **需求不创建文档。** 客户开口的时候,那些文档**必须已经存在** —— 由客户生成器调
 `DocumentStore.ServerCreate` 建好,再拿它们的 `{SpecIndex, Number}` 组一条需求出来。
 
+### `RequestCatalogue`(ScriptableObject)—— 递增的需求序列
+
+```csharp
+public class RequestCatalogue : ScriptableObject
+{
+    public int Count { get; }
+    public bool TryGet(int tier, out RequestTier wanted);
+
+    [System.Serializable]
+    public struct RequestEntry
+    {
+        public int SpecIndex;   // 要哪个种类
+        public int Count;       // 要几份(展开成 1..Count 号)
+    }
+
+    [System.Serializable]
+    public struct RequestTier
+    {
+        public RequestEntry[] Wanted;
+    }
+}
+```
+
+**第 N 条出现的需求,取第 N 层。** 数组顺序就是契约,和另外两张表一样:**只能追加,不能重排**。
+
+**超出表长就重复最后一层** —— 回合是限时的,需求迟早会用完,而「打到最后没有需求了」是个比
+「一直要最难的」更糟的结局。
+
+**「合同 ×2」展开成「合同 1、合同 2」**。两队各自有自己那份合同 1 和合同 2,
+需求说的是名字,不是某一队的哪一份。
+
 ### `Customer`(NetworkBehaviour,场景里一个)
 
 ```csharp
@@ -186,16 +231,24 @@ public class ScoreBoard : NetworkBehaviour
     public static ScoreBoard Instance { get; }
 
     public int ScoreOf(int team);
-    public int Quota { get; }
+    public float Remaining { get; }   // 秒。回合剩余时间
     public bool IsOver { get; }
     public int Winner { get; }        // -1 = 还没分出来,-2 = 平局
 
     public event Action ScoresChanged;
 
     [Server] public void ServerAward(int team, int points);
-    [Server] public void ServerReset();
+    [Server] public void ServerReset();       // 分数归零、钟重置
+
+    // 序列化字段:回合时长(秒)、每个队伍的名字/颜色 —— 后者这轮可以不做
 }
 ```
+
+**钟是服务端权威的**,因为「什么时候结束」不能由各端自己算。**服务端每秒写几次 `Remaining`**,
+客户端显示它、两次更新之间用自己的 delta 平滑 —— 一个浮点数每秒写几次,和
+`Computer` 那个下载进度不是一回事(那个是「不写也能各自算对」,这个不能)。
+
+**`ScoreBoard` 不知道回合怎么跑**,只知道分数和时间。**谁交的货、交给谁,是别人的事。**
 
 ---
 
@@ -203,7 +256,7 @@ public class ScoreBoard : NetworkBehaviour
 
 | 窗口 | 独占文件 | 做什么 |
 |---|---|---|
-| **P0**(核心窗口) | `Documents/DocumentRequest.cs`、`Documents/RequestBoard.cs`、`Stations/ScoreBoard.cs`、`Interaction/IntakeVolume.cs` | 数据层 + 抽出来的判定 |
+| **P0**(核心窗口) | `Documents/DocumentRequest.cs`、`Documents/RequestBoard.cs`、`Documents/RequestCatalogue.cs`、`Stations/ScoreBoard.cs`、`Interaction/IntakeVolume.cs` | 数据层 + 抽出来的判定 + 钟 |
 | **W1 客户** | `Npc/Customer.cs`、`Npc/CustomerSpawner.cs`、`Npc/RequestLabel.cs` | 客户实体、生成器、头顶显示 |
 | **W2 交付** | `Npc/DeliveryZone.cs`、`Interaction/FolderIntake.cs`、`Interaction/NetworkGrabbable.cs` | 收件区 + 文件夹分队 + 只装同队 |
 | **W3 接线** | `Stations/Printer.cs`、`Stations/SupplyBox.cs`、`Interaction/GrabbableSpawner.cs`、`Stations/Computer.cs` | 两个工位改用 `IntakeVolume`;箱子吐出带队的文件夹 |
@@ -212,11 +265,15 @@ public class ScoreBoard : NetworkBehaviour
 
 ---
 
-## 六、还没定的(明天开工前问用户)
+## 六、还没定的
 
-1. **一次场上几个客户?** —— 建议先 3 个
-2. **一条需求几份文档?** 固定 2 份,还是 1~4 随机?
-3. **配额多少?** 「先到 N 分」的 N
+已经定了的:场上两个客户 · 需求按序列递增 · 一条 10 分 · 限时高分者胜。
+
+**还差两个数,明天开工前给我:**
+
+1. **回合多长时间?**(建议先 5 分钟)
+2. **场景里摆几个客户位?** —— 场上同时两个,但「离开 / 进场」要位子,所以至少三个,
+   建议**四个**(两个在用、一个在走、一个在来)
 
 ---
 
