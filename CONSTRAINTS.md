@@ -370,23 +370,26 @@ public static bool IsHeldBy(NetworkManager manager, int clientId);   // 服务�
 
 **这条对将来的文件夹、章笔座、任何「收进去办事」的容器同样成立。**
 
-### 文档数据层 —— 第二轮
+### 文档数据层 —— 第三轮
 
-命名空间 `Overworked.Documents`。**一份文档是「值」,不是「物体」** —— 库里的一条记录,出口时才变成一个可抓物体。
+命名空间 `Overworked.Documents`。**一份文档是「值」,不是「物体」** —— 库里的一条记录,打印时才变成一个可抓物体。
+
+**这一版推翻了上一版的单位。** 上一版把「解锁」当成解锁一个**种类**;而游戏里玩家拿到的是**某一份文件**。
+所以一条 catalogue 记录现在指的是**种类**(合同 / Excel / 图片 / 文档),
+一份**文档**是某个种类下的一个编号,由 NPC 在回合里点名时创建。
 
 ```csharp
 public enum DocumentSource { Filing = 0, Internet = 1 }
 
 [System.Serializable]
-public struct DocumentRecord     // 只有 public 字段,同 ContainerEntry 的规矩
+public struct DocumentRecord     // 只有三个字段,同 ContainerEntry 的规矩
 {
-    public int PayloadIndex;     // 外观模板,指向 PayloadCatalogue
-    public int Number;           // 编号,从 1 开始,按 PayloadIndex 各自计数
+    public int SpecIndex;        // 哪个种类,指向 DocumentCatalogue
+    public int Number;           // 编号,按 (种类, 队伍) 各自从 1 开始
     public int Team;             // 队伍,-1 = 不上色
-    public int Source;           // DocumentSource,存成 int
 }
 
-public class DocumentCatalogue : ScriptableObject   // 「可获取的规格表」,不是已存在的文档
+public class DocumentCatalogue : ScriptableObject   // 「种类表」,不是已存在的文档
 {
     public int Count { get; }
     public bool TryGet(int index, out Spec spec);
@@ -395,37 +398,61 @@ public class DocumentCatalogue : ScriptableObject   // 「可获取的规格表�
     [System.Serializable]
     public struct Spec
     {
-        public string DisplayName;   // 面板上显示的名字
-        public int PayloadIndex;     // 印出来是什么样
+        public string DisplayName;   // 「合同」「Excel」「图片」
+        public int PayloadIndex;     // 这一类印出来是什么样
         public int Source;           // DocumentSource
-        public float FetchSeconds;   // 获取耗时。**至今没有任何代码读它**
+        public float FetchSeconds;   // Internet 的获取耗时
     }
 }
 
 public class DocumentStore : NetworkBehaviour      // 场景里一个 NetworkObject 上挂一个
 {
-    public static DocumentStore Instance { get; }   // 还没 spawn 时是 null,那是正常状态
+    public static DocumentStore Instance { get; }    // 还没 spawn 时是 null,那是正常状态
     public int Count { get; }
-    public bool TryGet(int id, out DocumentRecord record);   // 返回 false 是预期的,不是异常
+    public bool TryGet(int id, out DocumentRecord record);            // false 是预期的,不是异常
+    public bool TryGetSpec(int id, out DocumentCatalogue.Spec spec);  // id 变成全部信息的唯一途径
 
-    [Server] public int ServerCreate(int payloadIndex, int team, int source);  // 返回新 id
+    [Server] public int ServerCreate(int specIndex, int team);        // 「点名」一份文档,返回新 id
 }
 
-// NetworkGrabbable 新增
+public class DocumentUnlocks : NetworkBehaviour     // 和 DocumentStore 挂在同一个物体上
+{
+    public static DocumentUnlocks Instance { get; }  // null = 什么都不锁
+    public int UnlockedCount { get; }
+    public bool TryGetUnlocked(int index, out int documentId);
+    public bool IsUnlocked(int documentId);
+    public event Action UnlockedChanged;
+    [Server] public bool ServerUnlock(int documentId);      // 「拿到」一份文档
+    [Server] public void ServerResetUnlocks();
+}
+
+// NetworkGrabbable
 public int DataId { get; }                 // -1 = 不是文档(纸、墨)
 public void ServerSetDataId(int id);       // 靠 SpawnGrabbable 调,别在调用点自己调
 
-// Printer 新增
+// Printer
 public ContainerBase Queue { get; }        // 任务队列。**只塞 ContainerEntry.ForData**,别的一律在队头被丢弃并报警
 public int PrintingDocument { get; }       // 正在打的那份文档的 id
+
+// Computer
+public bool IsFetching(int documentId);
+[Server] public bool ServerBeginFetch(int documentId, Printer printer, int team);   // 它**不创建**任何东西
 ```
 
 **契约(写下来是因为多次被问):**
 
 - **id 就是 `DocumentStore` 里的下标**,只能追加,**一局内不删**。所以「id 永远有效」成立,也就不需要「已删除」这种状态
-- **编号在服务端分配**,扫同类最大编号加一。不要自己传编号进来 —— 编号是 store 给的
-- **`Data` 条目 = 文档,`Entity` 条目 = 原料。没有例外。** 让 `Entity` 也能带编号,「一份文档」就有了两种写法,每个后续模块都得先问「你指哪种」
-- **`Printer.Queue` 是给别的模块喂东西的口子。** 加一个「别人要往里喂东西的容器」时,**那个口子属于交付范围** —— 只放实现里等于接口没写完(第一轮 W1 就漏了这条,W2 和 W3 同时撞上)
+- **`DocumentRecord` 里没有外观、没有来源。** 那是**种类**的属性,拷进记录就是同一个事实的第二份拷贝 —— 而且**多条 spec 可以共用同一个 payload**(合同和报表都是那张纸),外观本来就分不出种类
+- **编号按 (种类, 队伍) 各自递增。** 红队的 Excel 1 和蓝队的 Excel 1 是两份不同的文档。
+  **只按种类数是一个真 bug**:两队同时开工时编号会交替往下走,后动手的那队永远做不出自己的 Excel 1
+- **「点名」和「拿到」是两件事。** NPC 点名 → `ServerCreate` 建记录;玩家拿到 → `DocumentUnlocks.ServerUnlock`。
+  所以 `ServerBeginFetch` **不创建任何东西**,只是把一条已经存在的记录送进队列。
+  这个差就是面板上那些灰行的意义:任务点名三份,拿到一份,面板上三行、两行灰的
+- **`Data` 条目 = 文档,`Entity` 条目 = 原料。没有例外。** 让 `Entity` 也能带编号,「一份文档」就有了两种写法
+- **`DocumentStore` 是 id 变成「名字 / 外观 / 来源 / 耗时」的唯一地方。** 不要再给别的组件各发一份
+  catalogue —— 那会变成四份各自可能接错的引用
+- **`Printer.Queue` 是给别的模块喂东西的口子。** 加一个「别人要往里喂东西的容器」时,
+  **那个口子属于交付范围** —— 只放实现里等于接口没写完(第一轮 W1 就漏了这条,W2 和 W3 同时撞上)
 
 ### 为什么四样东西都在 `SpawnGrabbable` 里设
 
