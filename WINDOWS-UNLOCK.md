@@ -151,6 +151,21 @@ public class DocumentUnlocks : NetworkBehaviour
 **内部用 `SyncList<int>`**,存已解锁的 spec 索引。理由和 `DocumentStore` 一样:
 `ContainerBase` 已经在跑这个类型,已知可行。**这张表只增不减**(`ServerResetUnlocks` 是给测试用的)。
 
+> **`Instance` 为 null 时,一律当作「没有锁」。** 调用点这么写:
+>
+> ```csharp
+> DocumentUnlocks unlocks = DocumentUnlocks.Instance;
+> if (unlocks != null && !unlocks.IsUnlocked(specIndex))
+>     return;   // 或这一行画成灰的
+> ```
+>
+> 两种失败的代价不对称:场景里**没有这个组件**时,「锁不生效」的表现是**面板上没有灰行** ——
+> 验收第 2 条一眼就看得出来;反过来全部拒绝的表现是「电脑坏了」,和一个没接线的工位长得一模一样,
+> 要花久得多才能找到。
+>
+> **但「组件在、`_catalogue` 没填」是反过来的** —— 全部锁上,而且启动时报错。
+> 那是「东西在但填错了」,不是「场景比这个功能还老」,两种情况不该给同一个答案。
+
 **`Instance` 的写法和 `DocumentStore` 一模一样** —— 在 `OnStartNetwork` 里赋值、发现第二个时报错,
 在 `OnStopNetwork` 里清空。照着抄 `DocumentStore.cs`,不要另发明一套。
 
