@@ -9,28 +9,28 @@ namespace Overworked.Documents
     /// builds the serializer by walking this type's fields and **silently skips private ones**, so
     /// a [SerializeField] private field would compile, run, and never cross the wire.
     ///
-    /// This is a job, not a document. Nothing in <see cref="DocumentStore"/> exists while one of
-    /// these is in flight: the number is handed out when the fetch lands, not when it is ordered.
-    /// That is what keeps a request that is never satisfied — a printer removed from the scene
-    /// while the fetch was running — from burning a number that nothing can ever use.
+    /// This is a job, not a document. The document already exists — it was named by whoever asked
+    /// for it, and it is in <see cref="DocumentStore"/> — and this is the wait before it can be
+    /// printed. Nothing is created when the wait ends; an entry is added to a queue.
     ///
-    /// There is no id. A fetch is identified by the spec it is for, because a computer can only be
-    /// waiting on one of each at a time.
+    /// There is no id. A fetch is identified by the document it is for, because a computer can
+    /// only be waiting on the same document once.
     /// </remarks>
     [System.Serializable]
     public struct DocumentFetch
     {
         /// <summary>
-        /// Index into the computer's <see cref="DocumentCatalogue"/>.
+        /// Id of the document being fetched, into <see cref="DocumentStore"/>.
         /// </summary>
         /// <remarks>
-        /// The index rather than the <see cref="DocumentCatalogue.Spec"/> itself. A spec is an
-        /// asset-authoring detail, and copying one into a replicated struct would freeze the
-        /// name and the duration at the moment the fetch started — so renaming a document or
-        /// retuning its cost would apply to new fetches and not to running ones, for no gain.
-        /// Every peer already holds the catalogue and can look the index up.
+        /// An id rather than the kind or the appearance. The document is a specific one — this
+        /// spreadsheet, not spreadsheets in general — and every peer already holds the store the
+        /// id resolves through.
+        ///
+        /// It is also what the fetch lands as: the queue entry is written from this id, so a
+        /// document cannot be fetched as one thing and filed as another.
         /// </remarks>
-        public int SpecIndex;
+        public int DocumentId;
 
         /// <summary>
         /// Object id of the printer this document is being fetched for.
@@ -46,24 +46,13 @@ namespace Overworked.Documents
         public int PrinterObjectId;
 
         /// <summary>
-        /// Which team ordered it, or -1 for no colour.
-        /// </summary>
-        /// <remarks>
-        /// Carried here rather than read off the player at the end, because there is no player at
-        /// the end: a fetch outlives the press that started it, and whoever is standing at the
-        /// machine when it lands need not be whoever ordered it — or connected at all. It becomes
-        /// <see cref="DocumentRecord.Team"/> the moment the document exists.
-        /// </remarks>
-        public int Team;
-
-        /// <summary>
         /// The server's clock reading at which this lands. **Clients must not read this.**
         /// </summary>
         /// <remarks>
         /// It is the server's <c>Time.timeAsDouble</c>, which has no meaning on a peer that
         /// started at a different moment. It is written exactly once, when the fetch begins, and
         /// never again — which is what keeps a running countdown off the wire entirely. A client
-        /// draws its bar from its own clock and <c>Spec.FetchSeconds</c>.
+        /// draws its bar from its own clock and the kind's <c>FetchSeconds</c>.
         ///
         /// Kept here rather than in a list beside this one because two lists that have to stay
         /// index-aligned are two lists that can stop being index-aligned. One list that the server

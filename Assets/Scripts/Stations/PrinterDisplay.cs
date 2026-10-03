@@ -259,10 +259,12 @@ namespace Overworked.Stations
                 return false;
 
             DocumentStore store = DocumentStore.Instance;
-            if (store == null || !store.TryGet(documentId, out DocumentRecord document))
+            if (store == null
+                || !store.TryGet(documentId, out DocumentRecord document)
+                || !store.TryGetSpec(documentId, out DocumentCatalogue.Spec spec))
                 return false;
 
-            GameObject prefab = _catalogue.Get(document.PayloadIndex);
+            GameObject prefab = _catalogue.Get(spec.PayloadIndex);
             if (prefab == null)
                 return false;
 

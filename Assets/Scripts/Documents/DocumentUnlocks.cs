@@ -6,21 +6,28 @@ using UnityEngine;
 namespace Overworked.Documents
 {
     /// <summary>
-    /// Which kinds of document this round has opened up.
+    /// Which of the round's documents the players have actually been given.
     /// </summary>
     /// <remarks>
     /// One of these per session, on a scene NetworkObject, alongside <see cref="DocumentStore"/>.
     /// The server writes, every peer reads.
     ///
-    /// **The store and this answer different questions, which is why they are two components.**
-    /// The store holds documents that *exist* — instances, each with a number, created when
-    /// somebody prints one. This holds kinds that may be *asked for* — the catalogue's indices,
-    /// decided before anything is printed. A document can exist for a kind that is not unlocked
-    /// (something created it directly) and a kind can be unlocked with no document behind it,
-    /// which is the normal state of a round that has not started producing yet.
+    /// **Being named and being yours are two different things, and this is the second one.** A
+    /// customer asking for a contract, a colleague promising a spreadsheet, a file whose download
+    /// rights have just opened — each of those puts a record in the store, and none of them puts
+    /// anything in a player's hands. This list is what changes when the document is actually
+    /// handed over, and it is what the computer refuses to print without.
     ///
-    /// **The list only grows.** Nothing is ever re-locked, so membership is the whole of the
-    /// state and there is no ordering to keep. That is why it is a list of indices rather than a
+    /// That gap is the whole point of the round it was built for. A task names three documents
+    /// and the panel shows three rows, two of them greyed — the player can see what the job wants
+    /// before they have any of it, which is what makes the job a plan rather than a surprise.
+    ///
+    /// **It holds document ids, not catalogue indices.** A kind is not something a player earns;
+    /// an Excel is. Two teams earning "Excel" separately earn two different documents, and a list
+    /// of kinds could not tell them apart.
+    ///
+    /// **The list only grows.** Nothing is ever taken back, so membership is the whole of the
+    /// state and there is no ordering to keep. That is why it is a list of ids rather than a
     /// dictionary or a set: the same type <see cref="DocumentStore"/> and
     /// <see cref="Containers.ContainerBase"/> already use, and an item goes over the wire through
     /// the very path a <c>SyncVar&lt;int&gt;</c> already uses — which the printer runs on, so it
@@ -28,10 +35,9 @@ namespace Overworked.Documents
     /// than the machinery to avoid it.
     ///
     /// **One change, one event — but a reset is several changes.** <see cref="ServerResetUnlocks"/>
-    /// clears and then adds once per spec, and every one of those raises
-    /// <see cref="UnlockedChanged"/>. A view that rebuilds on this event will therefore rebuild a
-    /// handful of times inside one frame when a round restarts. That is not worth machinery to
-    /// avoid; it is worth knowing before wondering why the panel flickers on startup.
+    /// clears and every removal raises <see cref="UnlockedChanged"/>. A view that rebuilds on
+    /// this event will therefore rebuild once per entry when a round restarts. That is not worth
+    /// machinery to avoid; it is worth knowing before wondering why the panel flickers on startup.
     ///
     /// **A null <see cref="Instance"/> means "nothing is locked".** Callers read it that way on
     /// purpose: a scene with no unlocks component should behave exactly as it did before this
@@ -40,27 +46,16 @@ namespace Overworked.Documents
     /// would hide if this refused instead is "the computer stopped working", which looks like a
     /// station nobody wired — a much more expensive thing to go and find.
     ///
-    /// The contrast worth knowing: a component that *is* present but has no catalogue assigned
-    /// goes the other way and locks everything, with an error at startup. That is deliberate —
-    /// an unset field is a mistake on a component that exists, not a scene that predates it.
+    /// There is no contrast to draw with a misconfigured component any more, which there was when
+    /// this read a catalogue: ids are validated against <see cref="DocumentStore"/>, so a
+    /// component that is present is a component that works, and the only failure left is being
+    /// absent.
     /// </remarks>
     [DisallowMultipleComponent]
     public class DocumentUnlocks : NetworkBehaviour
     {
         /// <summary>
-        /// The catalogue this machine's indices mean something in.
-        /// </summary>
-        /// <remarks>
-        /// Needed to answer two questions the list cannot: whether an index exists at all, and
-        /// which kinds start open. Both are properties of the asset rather than of the round, so
-        /// they are read from it rather than copied into replicated state.
-        /// </remarks>
-        [Tooltip("The same DocumentCatalogue the computers offer. Seeds what starts unlocked, and rejects indices that do not exist.")]
-        [SerializeField]
-        private DocumentCatalogue _catalogue;
-
-        /// <summary>
-        /// The unlocks in force, as catalogue indices, in the order they were opened.
+        /// The unlocks in force, as document ids, in the order they were handed over.
         /// </summary>
         /// <remarks>
         /// Must stay readonly: the weaver rejects a SyncType field that is assigned to.
@@ -83,45 +78,43 @@ namespace Overworked.Documents
         public event Action UnlockedChanged;
 
         /// <summary>
-        /// How many kinds are open.
+        /// How many documents have been handed over.
         /// </summary>
         public int UnlockedCount => _unlocked.Count;
 
         /// <summary>
-        /// Reads an unlock by its position in the list.
+        /// Reads an unlock by its position in this list.
         /// </summary>
         /// <remarks>
-        /// Position in this list, not a catalogue index — see <see cref="TryGetUnlocked"/>.
+        /// Position in this list, not a document id — see <see cref="TryGetUnlocked"/>. The order
+        /// is the order things were earned in, which is what a console listing wants to show.
         /// </remarks>
-        public bool TryGetUnlocked(int index, out int specIndex)
+        public bool TryGetUnlocked(int index, out int documentId)
         {
             if (index < 0 || index >= _unlocked.Count)
             {
-                specIndex = -1;
+                documentId = -1;
                 return false;
             }
 
-            specIndex = _unlocked[index];
+            documentId = _unlocked[index];
             return true;
         }
 
         /// <summary>
-        /// True when a catalogue index may be asked for.
+        /// True when a document has been handed over.
         /// </summary>
         /// <remarks>
-        /// False for an index that does not exist, as well as for one that is merely still
-        /// locked. The caller's answer to either is the same — do not offer it — and separating
-        /// them would invite somebody to report the first as a problem when the second is the
-        /// normal state of the round.
+        /// False for an id that does not exist, as well as for one that is merely still
+        /// outstanding. The caller's answer to either is the same — it cannot be printed — and
+        /// separating them would invite somebody to report the first as a problem when the second
+        /// is the normal state of a round in progress.
         /// </remarks>
-        public bool IsUnlocked(int specIndex)
+        public bool IsUnlocked(int documentId)
         {
-            if (_catalogue == null || !_catalogue.TryGet(specIndex, out _))
-                return false;
-
             for (int i = 0; i < _unlocked.Count; i++)
             {
-                if (_unlocked[i] == specIndex)
+                if (_unlocked[i] == documentId)
                     return true;
             }
 
@@ -129,51 +122,45 @@ namespace Overworked.Documents
         }
 
         /// <summary>
-        /// Server: opens a kind of document.
+        /// Server: hands a document over.
         /// </summary>
         /// <remarks>
         /// This is the whole interface the rest of the game needs. Whatever ends up deciding that
-        /// a player has earned a document — an NPC handing over a contract, a milestone, a debug
-        /// command — calls this and nothing else; the panel and the machines never learn where it
-        /// came from, because they have no business knowing.
+        /// a player has earned a document — a customer closing a job, a colleague accepting a
+        /// folder, a debug command — calls this and nothing else; the panel and the machines never
+        /// learn where it came from, because they have no business knowing.
+        ///
+        /// The id is checked against <see cref="DocumentStore"/> rather than taken on trust, so a
+        /// console typo cannot put an id in this list that nothing will ever resolve.
         /// </remarks>
-        /// <returns>False when the index is not a spec, or was already open.</returns>
+        /// <returns>False when no such document exists, or it was already handed over.</returns>
         [Server]
-        public bool ServerUnlock(int specIndex)
+        public bool ServerUnlock(int documentId)
         {
-            if (_catalogue == null || !_catalogue.TryGet(specIndex, out _))
+            DocumentStore store = DocumentStore.Instance;
+            if (store == null || !store.TryGet(documentId, out _))
                 return false;
-            if (IsUnlocked(specIndex))
+            if (IsUnlocked(documentId))
                 return false;
 
-            _unlocked.Add(specIndex);
+            _unlocked.Add(documentId);
             return true;
         }
 
         /// <summary>
-        /// Server: forgets every unlock and opens the ones the catalogue says start open.
+        /// Server: forgets every unlock.
         /// </summary>
         /// <remarks>
-        /// Clearing first is what makes this safe to call at startup as well as by hand. A
-        /// SyncList keeps its contents across sessions — nothing resets it — so seeding without
-        /// clearing would append this round's starting set to whatever the last run left behind,
-        /// and the list would grow by one set per play. See the same reasoning on
-        /// <see cref="Stations.Computer"/>'s fetch list.
+        /// A SyncList keeps its contents across sessions — nothing resets it — so a round that
+        /// did not clear this would start with everything the last one had earned. See the same
+        /// reasoning on <see cref="Stations.Computer"/>'s fetch list.
+        ///
+        /// Clearing is the whole of it now. It used to seed from the catalogue, back when which
+        /// kinds exist was the same question as which ones a player may print; those came apart
+        /// when documents became things that are named rather than kinds that are opened.
         /// </remarks>
         [Server]
-        public void ServerResetUnlocks()
-        {
-            _unlocked.Clear();
-
-            if (_catalogue == null)
-                return;
-
-            for (int i = 0; i < _catalogue.Count; i++)
-            {
-                if (_catalogue.TryGet(i, out DocumentCatalogue.Spec spec) && spec.UnlockedAtStart)
-                    _unlocked.Add(i);
-            }
-        }
+        public void ServerResetUnlocks() => _unlocked.Clear();
 
         public override void OnStartNetwork()
         {
@@ -182,7 +169,7 @@ namespace Overworked.Documents
             _unlocked.OnChange += OnUnlockedChanged;
 
             /* Two of these in one scene is a wiring mistake whose only symptom would be a panel
-             * that disagrees with itself about what is on offer. */
+             * that disagrees with itself about what has been handed over. */
             if (Instance != null && Instance != this)
             {
                 Debug.LogError(
@@ -207,17 +194,10 @@ namespace Overworked.Documents
         {
             base.OnStartServer();
 
-            /* Loud, and deliberately the strict direction. A component that is present with no
-             * catalogue is a mistake on something that exists, not a scene that predates this
-             * feature — so it locks everything and says so, rather than quietly behaving like the
-             * version before it. Contrast the class remarks on a missing component. */
-            if (_catalogue == null)
-            {
-                Debug.LogError(
-                    $"{nameof(DocumentUnlocks)} on {gameObject.name} has no {nameof(DocumentCatalogue)} assigned, so nothing is unlocked and no document can be obtained. Assign the same asset the computers use.",
-                    this);
-            }
-
+            /* Nothing is seeded. Every document a round can produce is one somebody hands over,
+             * so a fresh round starts with none of them — which is the state this list already
+             * happens to be in when it is cleared. Done explicitly anyway, so the answer does not
+             * depend on the list having been empty to begin with. */
             ServerResetUnlocks();
         }
 

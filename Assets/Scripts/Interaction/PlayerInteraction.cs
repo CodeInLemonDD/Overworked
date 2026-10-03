@@ -220,6 +220,17 @@ namespace Overworked.Interaction
         private const int TeamThisRound = 0;
 
         /// <summary>
+        /// Which team this player is on.
+        /// </summary>
+        /// <remarks>
+        /// Exposed because the panel has to tell its own documents from the other side's: each
+        /// team earns its own, and neither can print the other's. Derived from the constant above
+        /// rather than stored, so the two cannot come to disagree about what team anybody is on —
+        /// when the 2v2 split arrives it is the constant that changes and this follows it.
+        /// </remarks>
+        public int Team => TeamThisRound;
+
+        /// <summary>
         /// Per-object copy of the assigned action asset. See PlayerMovementPrediction for
         /// why the shared asset must not be used directly.
         /// </summary>
@@ -1159,14 +1170,18 @@ namespace Overworked.Interaction
         }
 
         /// <summary>
-        /// Client: asks the server to create the chosen document and queue it on a printer.
+        /// Client: asks the server to send the chosen document to a printer.
         /// </summary>
         /// <remarks>
         /// A plain wrapper rather than the RPC itself, because the caller is the panel and an RPC
         /// is private to the behaviour it is declared on. Same shape as the pair above.
+        ///
+        /// Takes a **document id**, not a kind. What gets printed is one specific document — this
+        /// spreadsheet — and two teams hold two different spreadsheets that happen to share a
+        /// number.
         /// </remarks>
-        public void RequestDocument(NetworkObject computer, NetworkObject printer, int specIndex) =>
-            CmdRequestDocument(computer, printer, specIndex);
+        public void RequestDocument(NetworkObject computer, NetworkObject printer, int documentId) =>
+            CmdRequestDocument(computer, printer, documentId);
 
         /// <summary>
         /// Server: hands the chosen document to the machine it was ordered for.
@@ -1177,17 +1192,17 @@ namespace Overworked.Interaction
         /// the walk from it to the printer is the cost the game charges for a document — so
         /// checking against the printer would forbid the only thing this station does.
         ///
-        /// Everything past the range check belongs to the machine. Whether the document exists
-        /// yet, how long it takes to arrive and whether there is room for it are one question —
-        /// how this computer acquires a document — and it is answered in one place so that a
-        /// document from the filing cabinet and one from the Internet cannot end up with two
-        /// different sets of rules.
+        /// Everything past the range check belongs to the machine. Whether the document is this
+        /// team's, whether it has been handed over, how long it takes to arrive and whether there
+        /// is room for it are one question — how this computer acquires a document — and it is
+        /// answered in one place so that a filing-cabinet document and one from the Internet
+        /// cannot end up with two different sets of rules.
         /// </remarks>
         [ServerRpc]
         private void CmdRequestDocument(
             NetworkObject computerObject,
             NetworkObject printerObject,
-            int specIndex,
+            int documentId,
             NetworkConnection caller = null)
         {
             if (computerObject == null || printerObject == null || caller == null || !caller.IsActive)
@@ -1213,7 +1228,7 @@ namespace Overworked.Interaction
             if (to.sqrMagnitude > reach * reach)
                 return;
 
-            computer.ServerBeginFetch(specIndex, printer, TeamThisRound);
+            computer.ServerBeginFetch(documentId, printer, TeamThisRound);
         }
 
     }

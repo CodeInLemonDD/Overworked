@@ -201,10 +201,10 @@ namespace Overworked.UI
         /// <summary>
         /// The document rows, in catalogue order.
         /// </summary>
-        private readonly List<SpecRow> _documentRows = new();
+        private readonly List<DocumentRow> _documentRows = new();
 
         /// <summary>
-        /// When this client first saw each spec start being fetched, by catalogue index.
+        /// When this client first saw each document start being fetched, by document id.
         /// </summary>
         /// <remarks>
         /// Local, and deliberately so. The server publishes **that** a fetch is running and never
@@ -230,15 +230,15 @@ namespace Overworked.UI
         /// <remarks>
         /// A record rather than three lists kept the same length, because they are only ever
         /// right together and a row that is fetching has no business lighting up as the chosen
-        /// document — so which row means which spec, and whether it can be picked at all, have
+        /// document — so which row means which document, and whether it can be picked at all,
         /// to travel with the row.
         /// </remarks>
-        private sealed class SpecRow
+        private sealed class DocumentRow
         {
             public Button Button;
             public Image Background;
             public TextMeshProUGUI Label;
-            public int SpecIndex;
+            public int DocumentId;
             public bool Selectable;
 
             /// <summary>
@@ -281,6 +281,19 @@ namespace Overworked.UI
         private DocumentUnlocks _unlocks;
 
         /// <summary>
+        /// The team this panel's player is on.
+        /// </summary>
+        /// <remarks>
+        /// Cached when the window opens rather than read per row, for the same reason the movement
+        /// and stamina components are: by the time a row is built, the answer has to be something
+        /// this window already holds rather than something it goes looking for.
+        ///
+        /// Every document belongs to a team and only that team may print it, so this is what tells
+        /// the panel which of the store's documents are its business.
+        /// </remarks>
+        private int _team;
+
+        /// <summary>
         /// The movement component on the same player, cached so input can be handed back.
         /// </summary>
         private PlayerMovementPrediction _movement;
@@ -293,7 +306,7 @@ namespace Overworked.UI
         /// <summary>
         /// Index of the chosen document, or -1 when there is nothing to choose.
         /// </summary>
-        private int _chosenSpec = -1;
+        private int _chosenDocument = -1;
 
         /// <summary>
         /// Whether the panel is on screen.
@@ -334,7 +347,7 @@ namespace Overworked.UI
             _computer = computer;
 
             /* Followed rather than sampled. Two things can change what the document column may
-             * offer while the window is open: a fetch starting or landing, and a kind being opened
+             * offer while the window is open: a fetch starting or landing, and a document being
              * up. Both have to redraw it, and both go through the one handler — the work they need
              * is identical, and a second copy of it would be a second place for the selection to be
              * forgotten. */
@@ -350,6 +363,12 @@ namespace Overworked.UI
             _movement = interaction.GetComponent<PlayerMovementPrediction>();
             _stamina = interaction.GetComponent<PlayerStamina>();
 
+            /* Which side of the round this window belongs to. Read from the player rather than
+             * asked of the server, because it is the same answer on every peer and there is
+             * nothing to disagree about — and the server checks the team again where it matters,
+             * when a document is actually sent to a printer. */
+            _team = interaction.Team;
+
             Build();
             Rebuild();
 
@@ -358,7 +377,7 @@ namespace Overworked.UI
              * click do nothing, which reads as the window being broken. A row that is already
              * waiting is passed over for the same reason — it cannot be sent, so it cannot be what
              * the first click spends. */
-            Choose(FirstSelectableSpec());
+            Choose(FirstSelectableDocument());
 
             _canvasObject.SetActive(true);
             SetGameplayInputEnabled(false);
@@ -555,8 +574,9 @@ namespace Overworked.UI
         /// <remarks>
         /// Rows that cannot be pressed — one already on its way, one that is still locked — are
         /// drawn in place and made unclickable rather than removed. A list that shortened itself
-        /// under the player's cursor would move whatever they were about to press; and for a locked
-        /// kind, hiding it would hide the one thing the player is meant to learn from it.
+        /// under the player's cursor would move whatever they were about to press; and for a
+        /// document this team has not been handed, hiding it would hide the one thing the player is
+        /// meant to learn from it.
         ///
         /// Whether a row can be pressed is not the same as whether it is lit: a row that is waiting
         /// cannot be pressed but stays at full brightness, because it is working rather than
@@ -564,21 +584,21 @@ namespace Overworked.UI
         /// </remarks>
         private void BuildDocumentRows(float x, float width, float firstRowY)
         {
-            DocumentCatalogue catalogue = _computer.Catalogue;
+            DocumentStore store = DocumentStore.Instance;
 
-            if (catalogue == null || catalogue.Count == 0)
+            if (store == null || store.Count == 0)
             {
-                AddRow(x, firstRowY, width, "(没有可获取的文档)", null);
+                AddRow(x, firstRowY, width, "(这个回合还没有任何文件)", null);
                 return;
             }
 
-            PruneFetchClocks(catalogue);
+            PruneFetchClocks();
 
             /* The y is carried down through the groups rather than computed from a row number.
-             * Grouping is what breaks "the fourth row is the fourth spec", so nothing here may
-             * derive a spec from a position — which spec a row means travels on the row. */
-            float y = BuildSourceGroup(x, width, firstRowY, catalogue, DocumentSource.Filing);
-            BuildSourceGroup(x, width, y, catalogue, DocumentSource.Internet);
+             * Grouping is what breaks "the fourth row is the fourth document", so nothing here may
+             * derive a document from a position — which document a row means travels on the row. */
+            float y = BuildSourceGroup(x, width, firstRowY, store, DocumentSource.Filing);
+            BuildSourceGroup(x, width, y, store, DocumentSource.Internet);
         }
 
         /// <summary>
@@ -586,28 +606,35 @@ namespace Overworked.UI
         /// </summary>
         /// <remarks>
         /// A heading is drawn only when the group has something under it; a heading with nothing
-        /// following would be a promise the catalogue does not keep.
+        /// following would be a promise the round does not keep.
+        ///
+        /// Only this team's documents, for now. The other side's are real documents that exist in
+        /// the same store, and the panel is meant to show them greyed — neither team can print the
+        /// other's — but until that row is drawn, leaving them out is the honest reading: a row
+        /// nobody can press is not a row this list is entitled to offer.
         /// </remarks>
         /// <returns>The y the next group starts at.</returns>
         private float BuildSourceGroup(
             float x,
             float width,
             float y,
-            DocumentCatalogue catalogue,
+            DocumentStore store,
             DocumentSource source)
         {
-            if (!HasSpecInGroup(catalogue, source))
+            if (!HasDocumentInGroup(store, source))
                 return y;
 
             AddGroupHeading(x + GroupIndent, y, width - GroupIndent, GroupName(source));
             y += GroupHeadingHeight + RowGap;
 
-            for (int i = 0; i < catalogue.Count; i++)
+            for (int id = 0; id < store.Count; id++)
             {
-                if (!catalogue.TryGet(i, out DocumentCatalogue.Spec spec) || !InGroup(spec, source))
+                if (!store.TryGet(id, out DocumentRecord record) || record.Team != _team)
+                    continue;
+                if (!store.TryGetSpec(id, out DocumentCatalogue.Spec spec) || !InGroup(spec, source))
                     continue;
 
-                AddSpecRow(x + RowIndent, y, width - RowIndent, i, spec);
+                AddDocumentRow(x + RowIndent, y, width - RowIndent, id, record, spec);
                 y += RowHeight + RowGap;
             }
 
@@ -618,22 +645,34 @@ namespace Overworked.UI
         /// Builds one row of the document column.
         /// </summary>
         /// <remarks>
-        /// Nothing is derived from the row's position. The catalogue index travels with the row, in
-        /// <see cref="SpecRow.SpecIndex"/>, because grouping means the two no longer agree.
+        /// Nothing is derived from the row's position. The document id travels with the row, in
+        /// <see cref="DocumentRow.DocumentId"/>, because grouping means the two no longer agree.
+        ///
+        /// The label carries the number as well as the kind, because the kind is not enough to
+        /// name a document: a round has an Excel 1 and an Excel 2, and a task asks for one of them.
         /// </remarks>
-        private void AddSpecRow(float x, float y, float width, int specIndex, DocumentCatalogue.Spec spec)
+        private void AddDocumentRow(
+            float x,
+            float y,
+            float width,
+            int documentId,
+            in DocumentRecord record,
+            in DocumentCatalogue.Spec spec)
         {
-            bool fetching = _computer.IsFetching(specIndex);
-            bool selectable = IsUnlocked(specIndex) && !fetching;
+            bool fetching = _computer.IsFetching(documentId);
 
-            /* Waiting beats locked when both are true at once, which a reset can do to a fetch
-             * already in flight. The document is on its way, and the countdown is the only sign of
-             * it there is — so that is the more useful of the two things the row could say. */
+            /* A document this team has not been handed cannot be sent to a printer, and saying so
+             * on the row is where a player learns there is one they have not earned yet. */
+            bool selectable = IsUnlocked(documentId) && !fetching;
+
+            /* Waiting beats locked when both are true at once, which can happen to a fetch already
+             * in flight. The document is on its way, and the countdown is the only sign of it there
+             * is — so that is the more useful of the two things the row could say. */
             string label = fetching
-                ? FetchLabel(specIndex, BeginTracking(specIndex))
+                ? FetchLabel(documentId, BeginTracking(documentId))
                 : selectable
-                    ? spec.DisplayName
-                    : $"{spec.DisplayName}   锁定";
+                    ? $"{spec.DisplayName} {record.Number}"
+                    : $"{spec.DisplayName} {record.Number}   锁定";
 
             Color baseColour = selectable || fetching ? RowColour : RowLockedColour;
 
@@ -642,15 +681,15 @@ namespace Overworked.UI
                 y,
                 width,
                 label,
-                selectable ? () => Choose(specIndex) : null,
+                selectable ? () => Choose(documentId) : null,
                 baseColour);
 
-            _documentRows.Add(new SpecRow
+            _documentRows.Add(new DocumentRow
             {
                 Button = row,
                 Background = row.GetComponent<Image>(),
                 Label = row.GetComponentInChildren<TextMeshProUGUI>(),
-                SpecIndex = specIndex,
+                DocumentId = documentId,
                 Selectable = selectable,
                 BaseColour = baseColour,
             });
@@ -684,12 +723,12 @@ namespace Overworked.UI
         }
 
         /// <summary>
-        /// Whether a kind may be asked for.
+        /// Whether a document has been handed over to this player's team.
         /// </summary>
         /// <remarks>
-        /// A missing component means nothing is locked, which is what the server does with the same
-        /// answer: a scene that predates unlocks offers everything rather than nothing. The two
-        /// failures are not symmetric, and the cheap one is the one to prefer.
+        /// A missing component means nothing is locked, which is what the server does with the
+        /// same answer: a scene that predates unlocks offers everything rather than nothing. The
+        /// two failures are not symmetric, and the cheap one is the one to prefer.
         /// </remarks>
         private static bool IsUnlocked(int specIndex)
         {
@@ -698,12 +737,12 @@ namespace Overworked.UI
         }
 
         /// <summary>
-        /// Whether a spec belongs in a group.
+        /// Whether a kind belongs in a group.
         /// </summary>
         /// <remarks>
         /// Anything that is not Internet is filed, rather than only the value that means filing.
         /// A source the catalogue does not define is a data-entry mistake, and the one outcome that
-        /// must not come of it is a spec appearing in no group at all — the panel would silently
+        /// must not come of it is a kind appearing in no group at all — the panel would silently
         /// drop a document, which is exactly what a hand-written grouping invites.
         /// </remarks>
         private static bool InGroup(DocumentCatalogue.Spec spec, DocumentSource source) =>
@@ -713,11 +752,13 @@ namespace Overworked.UI
         /// <summary>
         /// Whether a group has anything under it.
         /// </summary>
-        private static bool HasSpecInGroup(DocumentCatalogue catalogue, DocumentSource source)
+        private bool HasDocumentInGroup(DocumentStore store, DocumentSource source)
         {
-            for (int i = 0; i < catalogue.Count; i++)
+            for (int id = 0; id < store.Count; id++)
             {
-                if (catalogue.TryGet(i, out DocumentCatalogue.Spec spec) && InGroup(spec, source))
+                if (!store.TryGet(id, out DocumentRecord record) || record.Team != _team)
+                    continue;
+                if (store.TryGetSpec(id, out DocumentCatalogue.Spec spec) && InGroup(spec, source))
                     return true;
             }
 
@@ -725,14 +766,14 @@ namespace Overworked.UI
         }
 
         /// <summary>
-        /// Forgets the countdowns for specs this machine is no longer waiting on.
+        /// Forgets the countdowns for documents this machine is no longer waiting on.
         /// </summary>
         /// <remarks>
         /// Entries are dropped, not the whole dictionary: a countdown has to survive a rebuild
         /// caused by some other row starting or landing. The keys are copied out before the
         /// removals, because a dictionary cannot be changed while it is being walked.
         /// </remarks>
-        private void PruneFetchClocks(DocumentCatalogue catalogue)
+        private void PruneFetchClocks()
         {
             if (_fetchStartedAt.Count == 0)
                 return;
@@ -741,12 +782,12 @@ namespace Overworked.UI
 
             foreach (KeyValuePair<int, float> entry in _fetchStartedAt)
             {
-                if (entry.Key >= catalogue.Count || !_computer.IsFetching(entry.Key))
+                if (!_computer.IsFetching(entry.Key))
                     _pruneBuffer.Add(entry.Key);
             }
 
-            foreach (int specIndex in _pruneBuffer)
-                _fetchStartedAt.Remove(specIndex);
+            foreach (int documentId in _pruneBuffer)
+                _fetchStartedAt.Remove(documentId);
 
             _pruneBuffer.Clear();
         }
@@ -754,13 +795,13 @@ namespace Overworked.UI
         /// <summary>
         /// Returns when this client began counting a fetch down, starting the clock if it is new.
         /// </summary>
-        private float BeginTracking(int specIndex)
+        private float BeginTracking(int documentId)
         {
-            if (_fetchStartedAt.TryGetValue(specIndex, out float started))
+            if (_fetchStartedAt.TryGetValue(documentId, out float started))
                 return started;
 
             started = Time.unscaledTime;
-            _fetchStartedAt[specIndex] = started;
+            _fetchStartedAt[documentId] = started;
             return started;
         }
 
@@ -774,16 +815,16 @@ namespace Overworked.UI
 
             for (int i = 0; i < _documentRows.Count; i++)
             {
-                SpecRow row = _documentRows[i];
+                DocumentRow row = _documentRows[i];
 
                 if (row.Label == null || row.Selectable)
                     continue;
-                if (!_fetchStartedAt.TryGetValue(row.SpecIndex, out float started))
+                if (!_fetchStartedAt.TryGetValue(row.DocumentId, out float started))
                     continue;
 
                 /* Compared before it is assigned: TMP rebuilds its mesh on every set, and this
                  * runs every frame the window is open. */
-                string text = FetchLabel(row.SpecIndex, started);
+                string text = FetchLabel(row.DocumentId, started);
                 if (row.Label.text != text)
                     row.Label.text = text;
             }
@@ -799,9 +840,9 @@ namespace Overworked.UI
         /// and the state it is in for one frame in every other case, so the wording has to be true
         /// of the long one without being wrong about the short one.
         /// </remarks>
-        private string FetchLabel(int specIndex, float started)
+        private string FetchLabel(int documentId, float started)
         {
-            float remaining = Mathf.Max(0f, FetchSeconds(specIndex) - (Time.unscaledTime - started));
+            float remaining = Mathf.Max(0f, FetchSeconds(documentId) - (Time.unscaledTime - started));
 
             return remaining <= 0f
                 ? "下载完成,等待打印机…"
@@ -809,15 +850,14 @@ namespace Overworked.UI
         }
 
         /// <summary>
-        /// How long a spec takes to acquire, or 0 when there is no such spec.
+        /// How long a document takes to acquire, or 0 when this client cannot name it.
         /// </summary>
-        private float FetchSeconds(int specIndex)
+        private static float FetchSeconds(int documentId)
         {
-            DocumentCatalogue catalogue = _computer != null ? _computer.Catalogue : null;
-            if (catalogue == null || !catalogue.TryGet(specIndex, out DocumentCatalogue.Spec spec))
-                return 0f;
-
-            return spec.FetchSeconds;
+            DocumentStore store = DocumentStore.Instance;
+            return store != null && store.TryGetSpec(documentId, out DocumentCatalogue.Spec spec)
+                ? spec.FetchSeconds
+                : 0f;
         }
 
         /// <summary>
@@ -825,7 +865,7 @@ namespace Overworked.UI
         /// </summary>
         /// <remarks>
         /// Two events land here and they want the same work: a fetch starting or landing, and a
-        /// kind being opened up. Neither is frequent and both are the same kind of news, so there
+        /// document being handed over. Neither is frequent and both are the same kind of news, so
         /// is one handler rather than two that would have to be kept agreeing.
         ///
         /// The selection is re-applied rather than left to survive, because rebuilding the rows
@@ -841,7 +881,7 @@ namespace Overworked.UI
                 return;
 
             Rebuild();
-            Choose(_chosenSpec);
+            Choose(_chosenDocument);
         }
 
         /// <summary>
@@ -1043,19 +1083,19 @@ namespace Overworked.UI
         /// put it somewhere the next printer press still sends from — and what it would send is a
         /// second fetch of a document already on its way, at full price.
         /// </remarks>
-        private void Choose(int index)
+        private void Choose(int documentId)
         {
-            _chosenSpec = -1;
+            _chosenDocument = -1;
 
             for (int i = 0; i < _documentRows.Count; i++)
             {
-                SpecRow row = _documentRows[i];
+                DocumentRow row = _documentRows[i];
                 if (row.Background == null)
                     continue;
 
-                bool chosen = row.Selectable && row.SpecIndex == index;
+                bool chosen = row.Selectable && row.DocumentId == documentId;
                 if (chosen)
-                    _chosenSpec = index;
+                    _chosenDocument = documentId;
 
                 row.Background.color = chosen ? RowChosenColour : row.BaseColour;
             }
@@ -1064,12 +1104,12 @@ namespace Overworked.UI
         /// <summary>
         /// The first row that is on offer, or -1 when none is.
         /// </summary>
-        private int FirstSelectableSpec()
+        private int FirstSelectableDocument()
         {
             for (int i = 0; i < _documentRows.Count; i++)
             {
                 if (_documentRows[i].Selectable)
-                    return _documentRows[i].SpecIndex;
+                    return _documentRows[i].DocumentId;
             }
 
             return -1;
@@ -1096,14 +1136,14 @@ namespace Overworked.UI
         {
             if (_interaction == null || _computer == null || printer == null)
                 return;
-            if (_chosenSpec < 0)
+            if (_chosenDocument < 0)
                 return;
 
-            _interaction.RequestDocument(_computer.NetworkObject, printer.NetworkObject, _chosenSpec);
+            _interaction.RequestDocument(_computer.NetworkObject, printer.NetworkObject, _chosenDocument);
 
-            if (FetchSeconds(_chosenSpec) > 0f)
+            if (FetchSeconds(_chosenDocument) > 0f)
             {
-                MarkWaiting(_chosenSpec);
+                MarkWaiting(_chosenDocument);
                 return;
             }
 
@@ -1124,12 +1164,12 @@ namespace Overworked.UI
         /// nothing, which leaves the row counting down to zero and sitting there — so the repair
         /// for that is closing and reopening the window, not a timer here.
         /// </remarks>
-        private void MarkWaiting(int specIndex)
+        private void MarkWaiting(int documentId)
         {
             for (int i = 0; i < _documentRows.Count; i++)
             {
-                SpecRow row = _documentRows[i];
-                if (row.SpecIndex != specIndex || !row.Selectable)
+                DocumentRow row = _documentRows[i];
+                if (row.DocumentId != documentId || !row.Selectable)
                     continue;
 
                 row.Selectable = false;
@@ -1145,7 +1185,7 @@ namespace Overworked.UI
                     row.Button.interactable = false;
 
                 if (row.Label != null)
-                    row.Label.text = FetchLabel(specIndex, BeginTracking(specIndex));
+                    row.Label.text = FetchLabel(documentId, BeginTracking(documentId));
 
                 return;
             }

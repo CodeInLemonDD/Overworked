@@ -74,22 +74,6 @@ namespace Overworked.Documents
             [Tooltip("Seconds before this can be printed. 0 for the company's own files.")]
             [Min(0f)]
             public float FetchSeconds;
-
-            /// <summary>
-            /// True when this kind can be obtained from the first second of the round.
-            /// </summary>
-            /// <remarks>
-            /// **Deliberately not derivable from <see cref="Source"/>.** The obvious shortcut
-            /// reads "the filing cabinet is yours and the Internet is not" — but a contract is a
-            /// filing-cabinet document, and it is exactly the kind a customer is meant to have to
-            /// hand over before it can be produced. Where a document comes from and whether it is
-            /// available yet are two different questions, and only one of them is a rule.
-            ///
-            /// Read by <see cref="DocumentUnlocks"/> when it seeds a round. Unticking this is what
-            /// makes a document something the player has to go and earn.
-            /// </remarks>
-            [Tooltip("True when this can be obtained from the start of the round. Untick for kinds that have to be earned.")]
-            public bool UnlockedAtStart;
         }
 
         /// <summary>

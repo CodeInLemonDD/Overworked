@@ -404,13 +404,13 @@ namespace Overworked.Dev
             Log("give <payload> [number] [team]           put one into the local player's hands");
             Log("tp <x> <y>                               move the local player to a cell");
             Log("pos                                      print the local player's cell");
-            Log("document <spec> [team]                   make a document from the spec list");
-            Log("docs                                     list the documents that exist");
+            Log("document <spec> [team]                   name a document; prints its id");
+            Log("docs                                     list the round's documents and their ids");
             Log("queue <printer> <document>               put a document in a machine's job queue");
             Log("printers                                 list the printers and their queues");
-            Log("unlock <spec>                            open a document kind for this round");
-            Log("unlock reset                             close everything but the starting set");
-            Log("unlocks                                  list every kind and whether it is open");
+            Log("unlock <document>                        hand one over so it can be printed");
+            Log("unlock reset                             take every document back");
+            Log("unlocks                                  list every document and whether it is handed over");
             Log("help                                     this");
             Log("Coordinates are grid cells; objects land on the cell centre.");
         }
@@ -772,14 +772,15 @@ namespace Overworked.Dev
                 return;
             }
 
-            int id = store.ServerCreate(entry.PayloadIndex, team, entry.Source);
+            int id = store.ServerCreate(spec, team);
 
             /* Read back rather than predicting what it became: the number is the store's to give,
-             * and the printed id is the argument the next command wants. */
+             * and the printed id is the argument the next two commands want. */
             store.TryGet(id, out DocumentRecord record);
 
-            Log($"created document {id}: spec {spec} '{entry.DisplayName}', payload {record.PayloadIndex}, " +
-                $"number {record.Number}, team {record.Team}, source {(DocumentSource)record.Source}.");
+            Log($"named document {id}: kind {spec} '{entry.DisplayName}', number {record.Number}, " +
+                $"team {record.Team}, source {(DocumentSource)entry.Source}. " +
+                "'unlock' still has to hand it to somebody before it can be printed.");
         }
 
         /// <summary>
@@ -804,7 +805,7 @@ namespace Overworked.Dev
             }
             if (store.Count == 0)
             {
-                Log("no documents yet. 'document <spec>' makes one.");
+                Log("no documents yet. 'document <spec>' names one.");
                 return;
             }
 
@@ -812,9 +813,14 @@ namespace Overworked.Dev
             {
                 if (!store.TryGet(id, out DocumentRecord record))
                     continue;
+                if (!store.TryGetSpec(id, out DocumentCatalogue.Spec entry))
+                {
+                    Log($"#{id}  (kind {record.SpecIndex} is not in the catalogue)");
+                    continue;
+                }
 
-                Log($"#{id}  payload {record.PayloadIndex}  number {record.Number}  " +
-                    $"team {record.Team}  {(DocumentSource)record.Source}");
+                Log($"#{id}  {entry.DisplayName} {record.Number}  team {record.Team}  " +
+                    $"{(DocumentSource)entry.Source}");
             }
 
             Log($"{store.Count} document(s).");
@@ -919,22 +925,23 @@ namespace Overworked.Dev
         }
 
         /// <summary>
-        /// <c>unlock &lt;spec&gt;</c> and <c>unlock reset</c>
+        /// <c>unlock &lt;document&gt;</c> and <c>unlock reset</c>
         /// </summary>
         /// <remarks>
-        /// The only way to open a kind of document this round. Unlocking is meant to be something
-        /// a player earns from an NPC, and there are no NPCs yet, so the call they will eventually
-        /// make is reachable from here — which is what lets the panel and the data layer be
-        /// finished and tested before anything exists to hand a document over.
+        /// The only way to hand a document over this round. That is meant to be something an NPC
+        /// does, and there are no NPCs yet, so the call they will eventually make is reachable from
+        /// here — which is what lets the panel and the data layer be finished and tested before
+        /// anything exists to hand a document over.
         ///
-        /// Deliberately not folded into <c>document</c>. That command produces a document whatever
-        /// the locks say, because what it stands in for is "somebody already has this"; a console
-        /// that could not make a locked document could not set up the state the lock is about. The
-        /// lock is checked where it matters — in the server's fetch path and on the panel — and
-        /// those are what the acceptance run exercises.
+        /// Takes a **document id**, not a kind. What a player earns is an Excel 2, not "Excel" —
+        /// and two teams earn two different Excel 2s. <c>docs</c> lists the ids.
         ///
-        /// Server only. The list is replicated state, and a client that could append to it would
-        /// be opening kinds for everyone.
+        /// Deliberately separate from <c>document</c>. Naming a document and handing it over are
+        /// two acts in the game now, and a console that could only do both at once could not set up
+        /// the state the difference is about: a task that names three documents and hands over one.
+        ///
+        /// Server only. The list is replicated state, and a client that could append to it would be
+        /// handing documents to everybody.
         /// </remarks>
         private void Unlock(string[] parts)
         {
@@ -944,72 +951,88 @@ namespace Overworked.Dev
             DocumentUnlocks unlocks = DocumentUnlocks.Instance;
             if (unlocks == null)
             {
-                Log("no DocumentUnlocks in the scene, so there is nothing to open.");
+                Log("no DocumentUnlocks in the scene, so there is nothing to hand over.");
                 return;
             }
 
-            DocumentCatalogue catalogue = Catalogue;
-            if (catalogue == null)
+            DocumentStore store = DocumentStore.Instance;
+            if (store == null)
             {
-                Log("no document catalogue assigned or found.");
+                Log("no DocumentStore in the scene.");
                 return;
             }
 
             if (parts.Length < 2)
             {
-                Log("usage: unlock <spec>, or 'unlock reset'");
-                LogSpecs(catalogue);
+                Log("usage: unlock <document>, or 'unlock reset'. 'docs' lists the documents and their ids.");
                 return;
             }
 
             if (parts[1].ToLowerInvariant() == "reset")
             {
                 unlocks.ServerResetUnlocks();
-                Log($"reset; {unlocks.UnlockedCount} of {catalogue.Count} open.");
+                Log("reset; nothing is handed over.");
                 return;
             }
 
-            if (!TryParse(parts[1], "spec", out int spec))
+            if (!TryParse(parts[1], "document", out int id))
                 return;
 
-            if (!catalogue.TryGet(spec, out DocumentCatalogue.Spec entry))
+            if (!store.TryGet(id, out DocumentRecord record))
             {
-                Log($"no document spec {spec}.");
-                LogSpecs(catalogue);
+                Log($"no document {id}. 'docs' lists them.");
                 return;
             }
 
-            /* Asked before opening rather than after, purely so the two ways this can decline can
-             * be told apart in the answer. ServerUnlock reports both as false, which is the right
-             * answer for a caller that only wants to know whether the document is available now. */
-            if (unlocks.IsUnlocked(spec))
+            /* Named before handing over purely so the answer can say which document it was.
+             * ServerUnlock reports "no such document" and "already handed over" the same way,
+             * which is the right answer for a caller that only wants to know whether it can be
+             * printed. */
+            string name = DescribeDocument(store, id, record);
+
+            if (unlocks.IsUnlocked(id))
             {
-                Log($"spec {spec} '{entry.DisplayName}' is already open.");
+                Log($"{name} is already handed over.");
                 return;
             }
 
-            if (!unlocks.ServerUnlock(spec))
+            if (!unlocks.ServerUnlock(id))
             {
-                /* Reached only when this console can see the spec and the component says it is
-                 * not open — so the component is reading a different catalogue, or none. It says
-                 * so rather than reporting a refusal, because "refused" would send whoever reads
-                 * it looking for a rule instead of a reference. */
-                Log($"spec {spec} '{entry.DisplayName}' could not be opened; " +
-                    "check that DocumentUnlocks has the same catalogue assigned.");
+                /* Reached only when the store knows the document and the component says it is not
+                 * handed over — so the component cannot see the store. Says so rather than
+                 * reporting a refusal, because "refused" would send whoever reads it looking for a
+                 * rule instead of a missing component. */
+                Log($"{name} could not be handed over; check that the scene has a DocumentStore.");
                 return;
             }
 
-            Log($"unlocked spec {spec} '{entry.DisplayName}'; " +
-                $"{Ordinal(unlocks, spec)} of {unlocks.UnlockedCount} open.");
+            Log($"handed over {name}; {Ordinal(unlocks, id)} of {unlocks.UnlockedCount} so far.");
+        }
+
+        /// <summary>
+        /// A document as one readable phrase.
+        /// </summary>
+        /// <remarks>
+        /// The kind and number when the catalogue can say what the kind is, and the raw kind index
+        /// when it cannot. A record whose kind has been removed from the catalogue is still a real
+        /// document that somebody may be holding, so it is reported rather than skipped — the
+        /// alternative is a document that exists and cannot be seen.
+        /// </remarks>
+        private static string DescribeDocument(DocumentStore store, int id, in DocumentRecord record)
+        {
+            if (store.TryGetSpec(id, out DocumentCatalogue.Spec spec))
+                return $"#{id} '{spec.DisplayName} {record.Number}' team {record.Team}";
+
+            return $"#{id} (kind {record.SpecIndex} is not in the catalogue)";
         }
 
         /// <summary>
         /// <c>unlocks</c>
         /// </summary>
         /// <remarks>
-        /// Every kind the catalogue offers and whether the round has opened it — locked ones
-        /// included, which is the whole point. A list showing only what can be obtained would look
-        /// exactly like the same list from before this feature existed.
+        /// Every document the round has named and whether it has been handed over — the ones that
+        /// have not included, which is the whole point. A list showing only what a player holds
+        /// would look exactly like the same list from before this feature existed.
         ///
         /// Reads and changes nothing, so like <c>docs</c> and <c>printers</c> it is not a server
         /// command: a client being told a different set from the server is worth being able to ask
@@ -1017,40 +1040,46 @@ namespace Overworked.Dev
         /// </remarks>
         private void ListUnlocks()
         {
-            DocumentCatalogue catalogue = Catalogue;
-            if (catalogue == null)
+            DocumentStore store = DocumentStore.Instance;
+            if (store == null)
             {
-                Log("no document catalogue assigned or found.");
+                Log("no DocumentStore in the scene.");
                 return;
             }
 
             DocumentUnlocks unlocks = DocumentUnlocks.Instance;
 
             /* Said before the list rather than instead of it. With no component every row below
-             * reads as open, and that is otherwise indistinguishable from a catalogue where every
-             * kind was seeded open — which is a wiring mistake worth being able to see. */
+             * reads as handed over, and that is otherwise indistinguishable from a round where
+             * everything has been — which is a wiring mistake worth being able to see. */
             if (unlocks == null)
                 Log("no DocumentUnlocks in the scene; nothing is locked.");
 
-            for (int i = 0; i < catalogue.Count; i++)
+            if (store.Count == 0)
             {
-                if (!catalogue.TryGet(i, out DocumentCatalogue.Spec spec))
-                    continue;
-
-                bool open = unlocks == null || unlocks.IsUnlocked(i);
-
-                /* Whether it starts open is on every row on purpose: it is what tells a kind that
-                 * was seeded apart from one somebody opened by hand, and that is the difference
-                 * acceptance steps 1 and 9 are looking at. */
-                Log($"{Mark(open)} {i}  {spec.DisplayName}  {(DocumentSource)spec.Source}" +
-                    (spec.UnlockedAtStart ? "  starts open" : string.Empty));
+                Log("no documents yet. 'document <spec>' names one.");
+                return;
             }
 
-            Log($"{(unlocks != null ? unlocks.UnlockedCount : catalogue.Count)} of {catalogue.Count} open.");
+            int handed = 0;
+
+            for (int id = 0; id < store.Count; id++)
+            {
+                if (!store.TryGet(id, out DocumentRecord record))
+                    continue;
+
+                bool open = unlocks == null || unlocks.IsUnlocked(id);
+                if (open)
+                    handed++;
+
+                Log($"{Mark(open)} {DescribeDocument(store, id, record)}");
+            }
+
+            Log($"{handed} of {store.Count} handed over.");
         }
 
         /// <summary>
-        /// The tick and dot the unlock list is drawn with.
+        /// The tick and dot the document lists are drawn with.
         /// </summary>
         /// <remarks>
         /// A middle dot and a check mark rather than box drawing or an emoji: the dot is Latin-1
@@ -1059,16 +1088,17 @@ namespace Overworked.Dev
         /// does not have comes out as a box, and a status column that reads differently on every
         /// machine is worse than one with no marks at all.
         /// </remarks>
-        private static string Mark(bool open) => open ? "✓" : "·";
+        private static string Mark(bool handed) => handed ? "✓" : "·";
 
         /// <summary>
-        /// Where a kind sits in the unlocked list, counting from one; zero when it is not there.
+        /// Where a document sits in the handed-over list, counting from one; zero when it is not
+        /// there.
         /// </summary>
-        private static int Ordinal(DocumentUnlocks unlocks, int specIndex)
+        private static int Ordinal(DocumentUnlocks unlocks, int documentId)
         {
             for (int i = 0; i < unlocks.UnlockedCount; i++)
             {
-                if (unlocks.TryGetUnlocked(i, out int unlocked) && unlocked == specIndex)
+                if (unlocks.TryGetUnlocked(i, out int handed) && handed == documentId)
                     return i + 1;
             }
 
@@ -1288,14 +1318,15 @@ namespace Overworked.Dev
             {
                 result.Add("reset");
 
-                /* Every spec, including the open ones. Completing only what could still be opened
-                 * would make the list shrink as the round goes on, and the one thing this command
-                 * has to be able to answer is whether a given kind is already open. */
-                DocumentCatalogue catalogue = Catalogue;
-                if (catalogue != null)
+                /* Every document, including the ones already handed over. Completing only what
+                 * could still be handed over would make the list shrink as the round goes on, and
+                 * the one thing this command has to be able to answer is whether a given document
+                 * has been. */
+                DocumentStore store = DocumentStore.Instance;
+                if (store != null)
                 {
-                    for (int i = 0; i < catalogue.Count; i++)
-                        result.Add(i.ToString());
+                    for (int id = 0; id < store.Count; id++)
+                        result.Add(id.ToString());
                 }
 
                 return result;

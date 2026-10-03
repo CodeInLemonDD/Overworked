@@ -5,26 +5,60 @@ using UnityEngine;
 namespace Overworked.Documents
 {
     /// <summary>
-    /// Every document that exists in this round, and the counter that numbers them.
+    /// Every document that has been named in this round, and the counter that numbers them.
     /// </summary>
     /// <remarks>
     /// One of these per session, on a scene NetworkObject. The server appends, every peer reads.
     ///
-    /// **Documents are never removed.** A round is a few minutes long and a document is a small
-    /// struct, so the list staying whole costs nothing and buys two things: an id stays valid for
+    /// **A record appears when a document is named, not when it is made.** A customer asking for
+    /// a contract, a colleague promising a spreadsheet, a file whose download rights have just
+    /// been opened — each of those is the moment the document starts to exist as far as the round
+    /// is concerned, and each of them is before anybody has printed anything. Printing takes an
+    /// id that is already here and turns it into a sheet of paper; it never invents one.
+    ///
+    /// That split is what lets the two halves of the game talk about the same thing. A request
+    /// says "bring me Excel 2"; a printer's queue says "this id is being printed"; the panel says
+    /// "this one is greyed because you have not been given it yet". All three name an id from
+    /// this list, and none of them can be talking about a different document.
+    ///
+    /// **Documents are never removed.** A round is a few minutes long and a document is three
+    /// ints, so the list staying whole costs nothing and buys two things: an id stays valid for
     /// as long as anything might still be holding it, and there is no removal to get wrong. A
     /// list that only grows is a list whose indices are stable, which is what lets the index
     /// *be* the id.
     ///
-    /// Why not put the number and the team on <see cref="Containers.ContainerEntry"/> instead and
-    /// skip this entirely: because then a document would have two spellings — an Entity entry
-    /// carrying a number, and a Data entry pointing here — and every future module would have to
-    /// agree on which one it meant. One thing, one representation. Materials (paper, ink) are
-    /// entities and have no number; documents are data and have one.
+    /// **This is also where a document id turns into everything about it.** A record holds a
+    /// kind, and nothing else; the name, the appearance and the cost all live on the catalogue
+    /// entry that kind points at. Rather than make every reader hold a catalogue of its own —
+    /// the printer, the printer's display, the panel and the console would each need one, and
+    /// each could be wired to the wrong asset — the lookup is here, on the component that owns
+    /// the ids in the first place.
     /// </remarks>
     [DisallowMultipleComponent]
     public class DocumentStore : NetworkBehaviour
     {
+        /// <summary>
+        /// The kinds of document this store's records refer to.
+        /// </summary>
+        /// <remarks>
+        /// Must be the same asset every computer offers from. A different one would not crash
+        /// anything — it would silently rename documents, which is worse.
+        /// </remarks>
+        [Tooltip("The same DocumentCatalogue the computers offer from. Resolves what a record's SpecIndex means.")]
+        [SerializeField]
+        private DocumentCatalogue _catalogue;
+
+        /// <summary>
+        /// Every document, in the order it was named. The index is the id.
+        /// </summary>
+        /// <remarks>
+        /// SyncList rather than SyncDictionary: the id is the position, so a dictionary would be
+        /// a second copy of an ordering the list already has. It is the same type
+        /// <see cref="Containers.ContainerBase"/> uses for its contents, which is known to
+        /// replicate a struct of public fields correctly.
+        /// </remarks>
+        private readonly SyncList<DocumentRecord> _documents = new();
+
         /// <summary>
         /// The store in the scene, or null before it has spawned.
         /// </summary>
@@ -40,18 +74,7 @@ namespace Overworked.Documents
         public static DocumentStore Instance { get; private set; }
 
         /// <summary>
-        /// Every document, in creation order. The index is the id.
-        /// </summary>
-        /// <remarks>
-        /// SyncList rather than SyncDictionary: the id is the position, so a dictionary would be
-        /// a second copy of an ordering the list already has. It is the same type
-        /// <see cref="Containers.ContainerBase"/> uses for its contents, which is known to
-        /// replicate a struct of public fields correctly.
-        /// </remarks>
-        private readonly SyncList<DocumentRecord> _documents = new();
-
-        /// <summary>
-        /// How many documents exist.
+        /// How many documents have been named.
         /// </summary>
         public int Count => _documents.Count;
 
@@ -79,6 +102,21 @@ namespace Overworked.Documents
             base.OnStopNetwork();
         }
 
+        public override void OnStartServer()
+        {
+            base.OnStartServer();
+
+            /* Every id this store hands out is meaningless without the catalogue that says what
+             * its kind is, and the failure is silent: TryGetSpec would simply answer no for every
+             * document, and a printer that cannot resolve a document leaves it in the queue. */
+            if (_catalogue == null)
+            {
+                Debug.LogError(
+                    $"{nameof(DocumentStore)} on {gameObject.name} has no {nameof(DocumentCatalogue)} assigned, so nothing that reads a document will be able to say what it is. Assign the same asset the computers use.",
+                    this);
+            }
+        }
+
         /// <summary>
         /// Returns the document an id refers to, or false when there is none.
         /// </summary>
@@ -87,7 +125,7 @@ namespace Overworked.Documents
         /// outrun the store's replication by a frame, and a caller that has just joined may be
         /// holding entries for documents it has not been told about yet. Every caller has to
         /// decide what to show in the meantime; silently returning a zeroed record would hand
-        /// them a plausible-looking document that points at payload 0.
+        /// them a plausible-looking document pointing at kind 0.
         /// </remarks>
         public bool TryGet(int id, out DocumentRecord record)
         {
@@ -102,26 +140,47 @@ namespace Overworked.Documents
         }
 
         /// <summary>
-        /// Server: creates a document and returns its id.
+        /// Returns the kind a document is, or false when the id or the kind is not known.
         /// </summary>
-        /// <param name="payloadIndex">Which payload it prints as, from the payload catalogue.</param>
-        /// <param name="team">Which team it belongs to, or -1 for no colour.</param>
-        /// <param name="source">A <see cref="DocumentSource"/>.</param>
         /// <remarks>
-        /// The number is assigned here rather than passed in, so that two requests can never both
-        /// come out as the same document. Callers that want a specific number are asking for the
-        /// wrong thing: a number is this store's to give, and the NPC request that will check a
-        /// document against what was asked for is checking a value this method produced.
+        /// Failure covers three cases that a caller cannot tell apart and does not need to: no
+        /// such document, no catalogue assigned, and a record whose kind has since been deleted
+        /// from the catalogue. The answer to all three is the same — leave whatever is on screen
+        /// alone — and a caller that wanted to report one of them as a bug would have no way to
+        /// know which it had.
+        /// </remarks>
+        public bool TryGetSpec(int id, out DocumentCatalogue.Spec spec)
+        {
+            spec = default;
+
+            if (_catalogue == null || !TryGet(id, out DocumentRecord record))
+                return false;
+
+            return _catalogue.TryGet(record.SpecIndex, out spec);
+        }
+
+        /// <summary>
+        /// Server: names a document and returns its id.
+        /// </summary>
+        /// <param name="specIndex">Which kind of document it is, from the catalogue.</param>
+        /// <param name="team">Which team it belongs to, or -1 for no colour.</param>
+        /// <remarks>
+        /// The number is assigned here rather than passed in, so that two documents can never both
+        /// come out as the same one. Callers that want a specific number are asking for the wrong
+        /// thing: a number is this store's to give, and the request that checks a delivered folder
+        /// is checking a value this method produced.
+        ///
+        /// Nothing is printed by this. Naming a document and making one are separate acts now —
+        /// see the class remarks.
         /// </remarks>
         [Server]
-        public int ServerCreate(int payloadIndex, int team, int source)
+        public int ServerCreate(int specIndex, int team)
         {
             DocumentRecord record = new()
             {
-                PayloadIndex = payloadIndex,
-                Number = NextNumber(payloadIndex),
+                SpecIndex = specIndex,
+                Number = NextNumber(specIndex, team),
                 Team = team,
-                Source = source,
             };
 
             _documents.Add(record);
@@ -129,27 +188,31 @@ namespace Overworked.Documents
         }
 
         /// <summary>
-        /// Server: the next free number for a given payload.
+        /// Server: the next free number for a kind, within one team.
         /// </summary>
         /// <remarks>
         /// Counted by scanning rather than kept in a counter field. A counter would be a second
         /// piece of state that has to be reset when a round starts, and the failure mode of
         /// forgetting — documents resuming at last session's numbers, or restarting at 1 while
         /// the old ones still exist — is silent. Scanning is O(n) over a list of a few dozen
-        /// structs, at most once per print job, and it cannot disagree with the list because it
-        /// is derived from it.
+        /// structs, at most once per document named, and it cannot disagree with the list because
+        /// it is derived from it.
         ///
-        /// Numbers are per payload index, so Excel 1 and a contract 1 can coexist. That matches
-        /// how the game talks about them: "Excel 3" is a name, not a global sequence.
+        /// **Per kind, and per team.** Per kind, so a contract 1 and a spreadsheet 1 can coexist;
+        /// that is how the game talks, and "Excel 3" is a name rather than a position in a global
+        /// sequence. Per team, so both sides can have an Excel 1 — the two are different
+        /// documents that share a name, and neither side's progress can push the other's numbers
+        /// around. Counting for both teams in one sequence was a real bug: whichever team printed
+        /// second would find its first spreadsheet numbered 2.
         /// </remarks>
-        private int NextNumber(int payloadIndex)
+        private int NextNumber(int specIndex, int team)
         {
             int highest = 0;
 
             for (int i = 0; i < _documents.Count; i++)
             {
                 DocumentRecord record = _documents[i];
-                if (record.PayloadIndex == payloadIndex && record.Number > highest)
+                if (record.SpecIndex == specIndex && record.Team == team && record.Number > highest)
                     highest = record.Number;
             }
 

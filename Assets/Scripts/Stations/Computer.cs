@@ -28,35 +28,29 @@ namespace Overworked.Stations
     ///
     /// Acquiring a document is this machine's job, not the panel's and not the printer's. A
     /// document from the company's own files is filed straight into the chosen machine's queue;
-    /// one fetched over the Internet is held here for <c>Spec.FetchSeconds</c> first. The wait is
-    /// the whole of what "data acquisition" costs, and it is the only place the two sources differ
-    /// in behaviour rather than in labelling.
+    /// one fetched over the Internet is held here for its kind's <c>FetchSeconds</c> first. The
+    /// wait is the whole of what "data acquisition" costs, and it is the only place the two
+    /// sources differ in behaviour rather than in labelling.
+    ///
+    /// **It makes nothing.** The document it is asked to print was named long before — by whoever
+    /// handed it over — and this machine's part is to check that the asking player is entitled to
+    /// it, wait out the download if there is one, and put it in a queue. Two of those checks are
+    /// the ones a modified client would try to skip: the document has to belong to the asking
+    /// player's team, and it has to have been handed over. Both are answered here rather than on
+    /// the panel, which belongs to the client and can say whatever it likes.
     ///
     /// The fetch outlives the panel that started it, on purpose: walking away from a download
     /// does not cancel it, the same way walking away from the machine does not stop the printing.
     /// It also outlives the player, so a fetch ordered just before a disconnect still lands.
     ///
-    /// Refusals are silent. A full queue, a printer that has since gone away, and a document index
-    /// that does not exist all end the same way: nothing happens. Each is a normal state for the
-    /// player to be in, and a machine that announced them would be reporting its own bookkeeping.
+    /// Refusals are silent. A full queue, a printer that has since gone away, a document that is
+    /// not this team's and one that has not been handed over all end the same way: nothing
+    /// happens. Each is a normal state for the player to be in, and a machine that announced them
+    /// would be reporting its own bookkeeping.
     /// </remarks>
     [DisallowMultipleComponent]
     public class Computer : StationBase
     {
-        [Header("Documents")]
-
-        /// <summary>
-        /// The documents this computer offers.
-        /// </summary>
-        /// <remarks>
-        /// A catalogue of specifications, so the panel can list what is available without anything
-        /// having been created. Picking one is what makes a document; see
-        /// <see cref="DocumentStore.ServerCreate"/>.
-        /// </remarks>
-        [Tooltip("The documents this computer offers. Assign the DocumentCatalogue asset.")]
-        [SerializeField]
-        private DocumentCatalogue _catalogue;
-
         /// <summary>
         /// The panel that opens on a client when this computer is used.
         /// </summary>
@@ -90,11 +84,6 @@ namespace Overworked.Stations
         public event Action FetchingChanged;
 
         /// <summary>
-        /// The documents this computer offers.
-        /// </summary>
-        public DocumentCatalogue Catalogue => _catalogue;
-
-        /// <summary>
         /// How many fetches are in flight.
         /// </summary>
         public int FetchingCount => _fetching.Count;
@@ -118,16 +107,16 @@ namespace Overworked.Stations
         /// True when this machine is already waiting on a document.
         /// </summary>
         /// <remarks>
-        /// The panel asks this to grey a row out. It is deliberately keyed on the spec rather than
-        /// on "is anything fetching at all": a second, different document can be ordered while the
-        /// first is still coming, and stopping the player from doing that would be the machine
-        /// inventing a rule it has no reason to have.
+        /// The panel asks this to grey a row out. It is deliberately keyed on the document rather
+        /// than on "is anything fetching at all": a second, different document can be ordered
+        /// while the first is still coming, and stopping the player from doing that would be the
+        /// machine inventing a rule it has no reason to have.
         /// </remarks>
-        public bool IsFetching(int specIndex)
+        public bool IsFetching(int documentId)
         {
             for (int i = 0; i < _fetching.Count; i++)
             {
-                if (_fetching[i].SpecIndex == specIndex)
+                if (_fetching[i].DocumentId == documentId)
                     return true;
             }
 
@@ -171,15 +160,9 @@ namespace Overworked.Stations
         {
             base.OnStartServer();
 
-            /* Both of these are wiring mistakes whose only symptom is a machine that does nothing,
-             * which is indistinguishable from a machine that is working and simply not wanted yet. */
-            if (_catalogue == null)
-            {
-                Debug.LogError(
-                    $"{nameof(Computer)} on {gameObject.name} has no {nameof(DocumentCatalogue)} assigned; pressing E on it will do nothing.",
-                    this);
-            }
-
+            /* The one wiring mistake left on this machine. A station with no panel is a machine
+             * that does nothing, which is indistinguishable from a machine that is working and
+             * simply not wanted yet. */
             if (Panel == null)
             {
                 Debug.LogError(
@@ -228,12 +211,10 @@ namespace Overworked.Stations
             if (player == null || conn == null)
                 return;
 
-            /* An empty catalogue would open a panel with nothing on it. Leaving the press
-             * unanswered is the better failure: no window appears, and there is nothing to misread
-             * as the machine being broken. */
-            if (_catalogue == null || _catalogue.Count == 0)
-                return;
-
+            /* Deliberately no guard on there being anything to offer. There used to be one, back
+             * when this opened only if the catalogue had entries; what the panel lists now is the
+             * round's documents, and a round that has named none is a perfectly good thing to open
+             * a window on — it says so, which is more use than a press that does nothing. */
             player.ServerOpenComputerPanel(this);
         }
 
@@ -254,25 +235,32 @@ namespace Overworked.Stations
         /// </remarks>
         /// <returns>False when the request could not be started at all.</returns>
         [Server]
-        public bool ServerBeginFetch(int specIndex, Printer printer, int team)
+        public bool ServerBeginFetch(int documentId, Printer printer, int team)
         {
             if (printer == null || !printer.IsSpawned)
                 return false;
 
-            if (_catalogue == null || !_catalogue.TryGet(specIndex, out DocumentCatalogue.Spec spec))
+            DocumentStore store = DocumentStore.Instance;
+            if (store == null || !store.TryGet(documentId, out DocumentRecord record))
                 return false;
 
-            /* A locked kind is refused here, and not only greyed on the panel. The panel belongs to
-             * the client, and a modified one can send a spec index straight past it — so the list
-             * of what a round has opened is checked where the document would be made, which is the
-             * only place the answer cannot be argued with.
+            /* Not this team's document, and not handed over yet. Both are refused here rather than
+             * only greyed on the panel: the panel belongs to the client, and a modified one can
+             * send an id straight past it. This is the only place the answer cannot be argued
+             * with.
              *
-             * A null component means "nothing is locked", deliberately: a scene that predates this
-             * feature has no unlocks object, and it should behave exactly as it did before rather
-             * than have every machine refuse everything. See DocumentUnlocks for why the two
-             * failures are not symmetric. */
+             * The team is the record's, compared against the team the calling player is on —
+             * never against anything the client said. Each side has its own documents and none of
+             * them can be printed by the other, which is what stops one team's progress from
+             * being spent by the other. */
+            if (record.Team != team)
+                return false;
+
             DocumentUnlocks unlocks = DocumentUnlocks.Instance;
-            if (unlocks != null && !unlocks.IsUnlocked(specIndex))
+            if (unlocks != null && !unlocks.IsUnlocked(documentId))
+                return false;
+
+            if (!store.TryGetSpec(documentId, out DocumentCatalogue.Spec spec))
                 return false;
 
             NetworkObject printerObject = printer.NetworkObject;
@@ -283,13 +271,12 @@ namespace Overworked.Stations
              * kept, so a local document cannot fail for a reason a local document has no business
              * having. */
             if (spec.FetchSeconds <= 0f)
-                return Land(spec, printer, team);
+                return Land(documentId, printer);
 
             _fetching.Add(new DocumentFetch
             {
-                SpecIndex = specIndex,
+                DocumentId = documentId,
                 PrinterObjectId = printerObject.ObjectId,
-                Team = team,
                 ServerReadyAt = (float)Time.timeAsDouble + spec.FetchSeconds,
             });
 
@@ -323,13 +310,6 @@ namespace Overworked.Stations
                 if (now < fetch.ServerReadyAt)
                     continue;
 
-                if (!_catalogue.TryGet(fetch.SpecIndex, out DocumentCatalogue.Spec spec))
-                {
-                    _fetching.RemoveAt(i);
-                    i--;
-                    continue;
-                }
-
                 if (!TryResolvePrinter(fetch.PrinterObjectId, out Printer printer))
                 {
                     _fetching.RemoveAt(i);
@@ -337,7 +317,7 @@ namespace Overworked.Stations
                     continue;
                 }
 
-                if (!Land(spec, printer, fetch.Team))
+                if (!Land(fetch.DocumentId, printer))
                     continue;
 
                 _fetching.RemoveAt(i);
@@ -346,30 +326,26 @@ namespace Overworked.Stations
         }
 
         /// <summary>
-        /// Server: creates the document and files it into the machine's queue.
+        /// Server: files the document into the machine's queue.
         /// </summary>
         /// <remarks>
         /// The room is checked here rather than when the fetch started, because this is the moment
-        /// it has to be true and the moment the number is spent. A document created for a queue
-        /// that cannot take it would exist in the store, hold a number nothing else can ever use,
-        /// and be reachable by nothing — the number has no ceiling, so burning one is a permanent
-        /// change made for a request that was going to be refused anyway.
+        /// it has to be true.
+        ///
+        /// Nothing is created and no number is spent. The document was named by whoever handed it
+        /// over, long before anybody asked for it to be printed, so a queue with no room in it
+        /// costs the player time rather than the work — which is the whole reason this can afford
+        /// to wait instead of refusing.
         /// </remarks>
         /// <returns>False when there is nowhere to put it yet.</returns>
-        private bool Land(DocumentCatalogue.Spec spec, Printer printer, int team)
+        private bool Land(int documentId, Printer printer)
         {
             ContainerBase queue = printer.Queue;
             if (queue == null || queue.IsFull)
                 return false;
 
-            DocumentStore store = DocumentStore.Instance;
-            if (store == null)
-                return false;
-
-            int id = store.ServerCreate(spec.PayloadIndex, team, spec.Source);
-
             /* Silent when it fails, like every other full container in the project. */
-            return queue.ServerTryAdd(ContainerEntry.ForData(id));
+            return queue.ServerTryAdd(ContainerEntry.ForData(documentId));
         }
 
         /// <summary>
