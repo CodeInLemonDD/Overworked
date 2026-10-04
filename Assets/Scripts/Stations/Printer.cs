@@ -504,32 +504,36 @@ namespace Overworked.Stations
         /// </summary>
         private void UpdateIntake()
         {
-            /* Snapshot first, and only the loose ones. Despawning while enumerating
-             * ServerManager.Objects.Spawned throws, because that collection is a live view over a
-             * Dictionary and Despawn removes the key synchronously — and the checks that decide
-             * what counts as loose are the ones every intake in the game shares, so they live
-             * beside the snapshot rather than here. */
-            GrabbableSpawner.CollectLooseGrabbables(NetworkManager, _scanBuffer);
+            /* Snapshot first, and only the loose ones that are in the box. Despawning while
+             * enumerating ServerManager.Objects.Spawned throws, because that collection is a live
+             * view over a Dictionary and Despawn removes the key synchronously — and both the
+             * checks that decide what counts as loose and the box itself are shared with every
+             * other intake in the game, so they live in IntakeVolume rather than here. */
+            IntakeVolume.CollectInside(NetworkManager, transform, _intakeCentre, _intakeHalfExtents, _scanBuffer);
 
             for (int i = 0; i < _scanBuffer.Count; i++)
-                TrySwallow(_scanBuffer[i], _scanBuffer[i].transform.position);
+                TrySwallow(_scanBuffer[i]);
 
             _scanBuffer.Clear();
         }
 
         /// <summary>
-        /// Server: puts an item into its slot if it is lying in the intake box.
+        /// Server: puts an item into its slot.
         /// </summary>
         /// <remarks>
+        /// "In the box" is already settled — <see cref="IntakeVolume.CollectInside"/> only hands
+        /// over things that are. What is left is this machine's own question, and it is asked
+        /// twice over: which slot, and is there room.
+        ///
         /// Dispatched by payload, and each slot is asked about its own room. Paper and ink are
         /// separate containers so that filling one cannot block the other: a machine holding six
         /// sheets and no ink must still take a cartridge, and that is the case this shape exists
         /// for. A printed sheet is neither, so feeding one back in leaves it lying on the
         /// machine to be picked up rather than eaten and printed again.
         /// </remarks>
-        private void TrySwallow(NetworkGrabbable grabbable, Vector3 position)
+        private void TrySwallow(NetworkGrabbable grabbable)
         {
-            if (!IsInsideBox(_intakeHalfExtents, _intakeCentre, position))
+            if (grabbable == null)
                 return;
 
             int payload = grabbable.PayloadIndex;
@@ -571,18 +575,6 @@ namespace Overworked.Stations
              * the settle timer, the payload — that a recycled instance would bring back with
              * it. Passed explicitly so this does not depend on the prefab. */
             grabbable.NetworkObject.Despawn(DespawnType.Destroy);
-        }
-
-        /// <summary>
-        /// True when a world position falls inside a box around this object.
-        /// </summary>
-        private bool IsInsideBox(Vector3 halfExtents, Vector3 centre, Vector3 worldPosition)
-        {
-            Vector3 offset = transform.InverseTransformPoint(worldPosition) - centre;
-
-            return Mathf.Abs(offset.x) <= halfExtents.x
-                && Mathf.Abs(offset.y) <= halfExtents.y
-                && Mathf.Abs(offset.z) <= halfExtents.z;
         }
 
         /// <summary>

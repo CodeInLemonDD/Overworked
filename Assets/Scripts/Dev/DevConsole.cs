@@ -91,6 +91,18 @@ namespace Overworked.Dev
         [SerializeField]
         private DocumentCatalogue _catalogue;
 
+        /// <summary>
+        /// The escalating request sequence the tier command writes from.
+        /// </summary>
+        /// <remarks>
+        /// Optional, and found the same way <see cref="Catalogue"/> is. The console is the only
+        /// thing in the project that can write a request before the customer spawner exists, and
+        /// until that spawner is in the scene there is nothing to drag a reference from.
+        /// </remarks>
+        [Tooltip("Request tiers. Leave empty to use the project's RequestCatalogue (editor only).")]
+        [SerializeField]
+        private RequestCatalogue _requestCatalogue;
+
         [Header("Display")]
 
         /// <summary>
@@ -141,6 +153,15 @@ namespace Overworked.Dev
         private readonly List<string> _history = new();
 
         /// <summary>
+        /// Reused while assembling a request's rows.
+        /// </summary>
+        /// <remarks>
+        /// A field rather than a local so a command that runs on a keypress allocates nothing,
+        /// which is the rule every other buffer in the project follows.
+        /// </remarks>
+        private readonly List<DocumentRequest> _requestBuffer = new();
+
+        /// <summary>
         /// Where the arrow keys are in <see cref="_history"/>, or -1 for the line being typed.
         /// </summary>
         private int _historyIndex = -1;
@@ -154,7 +175,8 @@ namespace Overworked.Dev
         /// Every first word the console knows.
         /// </summary>
         private static readonly string[] Verbs =
-            { "spawn", "clear", "give", "tp", "pos", "team", "document", "docs", "queue", "printers", "unlock", "unlocks", "help" };
+            { "spawn", "clear", "give", "tp", "pos", "team", "document", "docs", "queue", "printers",
+              "unlock", "unlocks", "tier", "requests", "score", "round", "help" };
 
 #if UNITY_EDITOR
         /// <summary>
@@ -162,6 +184,11 @@ namespace Overworked.Dev
         /// lookup walks the asset database, and this is read once per command.
         /// </summary>
         private DocumentCatalogue _foundCatalogue;
+
+        /// <summary>
+        /// What <see cref="RequestTiers"/> found when the field was left empty.
+        /// </summary>
+        private RequestCatalogue _foundRequestCatalogue;
 #endif
 
         /// <summary>
@@ -392,6 +419,22 @@ namespace Overworked.Dev
                     SetTeam(parts);
                     return;
 
+                case "tier":
+                    CreateRequest(parts);
+                    return;
+
+                case "requests":
+                    ListRequests();
+                    return;
+
+                case "score":
+                    Award(parts);
+                    return;
+
+                case "round":
+                    ResetRound();
+                    return;
+
                 default:
                     Log($"unknown command '{verb}'. Try 'help'.");
                     return;
@@ -416,6 +459,10 @@ namespace Overworked.Dev
             Log("unlock <document>                        hand one over so it can be printed");
             Log("unlock reset                             take every document back");
             Log("unlocks                                  list every document and whether it is handed over");
+            Log("tier [n]                                 write request n from the tier table (default: the next one)");
+            Log("requests                                 list the live requests and what they name");
+            Log("score <team> <points>                    move a team's score; negative takes points off");
+            Log("round                                    zero the scores and restart the clock");
             Log("help                                     this");
             Log("Coordinates are grid cells; objects land on the cell centre.");
         }
@@ -879,6 +926,236 @@ namespace Overworked.Dev
         }
 
         /// <summary>
+        /// <c>tier [n]</c>
+        /// </summary>
+        /// <remarks>
+        /// **The stand-in for the customer spawner, and deliberately the same shape.** It reads
+        /// the tier the board is on, names every document that tier asks for — for every team, so
+        /// both sides have their own copy of each name — and then writes the request in the
+        /// numbers the store handed back. When the spawner arrives it should do exactly this;
+        /// the console is where the sequence can be walked through before any customer exists.
+        ///
+        /// The numbers agreeing across teams is not an assumption, it is a consequence: every
+        /// document in the round is created here or by the spawner, in lockstep for both teams,
+        /// because players print documents rather than making them. It is checked anyway, because
+        /// the failure — one team's Excel 2 being a different document from the other's — is
+        /// invisible until a delivery mysteriously will not count.
+        /// </remarks>
+        private void CreateRequest(string[] parts)
+        {
+            if (!RequireServer())
+                return;
+
+            RequestCatalogue tiers = RequestTiers;
+            if (tiers == null)
+            {
+                Log("no request catalogue assigned or found.");
+                return;
+            }
+
+            RequestBoard board = RequestBoard.Instance;
+            if (board == null)
+            {
+                Log("no RequestBoard in the scene.");
+                return;
+            }
+
+            DocumentStore store = DocumentStore.Instance;
+            if (store == null)
+            {
+                Log("no DocumentStore in the scene.");
+                return;
+            }
+
+            ScoreBoard scores = ScoreBoard.Instance;
+            int teamCount = scores != null ? scores.TeamCount : 1;
+
+            /* Defaulting to the board's own cursor rather than to zero is what makes the command
+             * walk the sequence: each call asks for the next tier, and a round that reached the
+             * end of the table keeps asking for the last one. */
+            int tier = board.RequestsMade;
+            if (parts.Length > 1 && !TryParse(parts[1], "tier", out tier))
+                return;
+
+            if (!tiers.TryGet(tier, out RequestCatalogue.RequestTier wanted))
+            {
+                Log("the request catalogue has no tiers authored.");
+                return;
+            }
+
+            _requestBuffer.Clear();
+
+            if (wanted.Wanted != null)
+            {
+                for (int i = 0; i < wanted.Wanted.Length; i++)
+                {
+                    RequestCatalogue.RequestEntry entry = wanted.Wanted[i];
+
+                    for (int n = 0; n < entry.Count; n++)
+                    {
+                        int number = -1;
+
+                        for (int team = 0; team < teamCount; team++)
+                        {
+                            int id = store.ServerCreate(entry.SpecIndex, team);
+                            store.TryGet(id, out DocumentRecord record);
+
+                            if (team == 0)
+                                number = record.Number;
+                            else if (record.Number != number)
+                                Log($"warning: team {team} was given {SpecName(entry.SpecIndex)}{record.Number} where team 0 was given {number}. The teams have drifted apart.");
+                        }
+
+                        _requestBuffer.Add(new DocumentRequest { SpecIndex = entry.SpecIndex, Number = number });
+                    }
+                }
+            }
+
+            int requestId = board.ServerCreate(_requestBuffer);
+
+            if (requestId < 0)
+            {
+                Log($"tier {tier} asks for nothing, so no request was written.");
+                return;
+            }
+
+            Log($"request {requestId} (tier {tier}) wants {_requestBuffer.Count} document(s). Nothing has been printed — 'queue' and a printer still have to make them.");
+        }
+
+        /// <summary>
+        /// <c>requests</c>
+        /// </summary>
+        /// <remarks>
+        /// Reads the board rather than a list of its own, the same way <c>docs</c> reads the
+        /// store, so it is the way a client checks it has been told about everything the server
+        /// has. It makes nothing and removes nothing, so it is not a server command.
+        /// </remarks>
+        private void ListRequests()
+        {
+            RequestBoard board = RequestBoard.Instance;
+            if (board == null)
+            {
+                Log("no RequestBoard in the scene.");
+                return;
+            }
+            if (board.Count == 0)
+            {
+                Log("no requests yet. 'tier' writes one.");
+                return;
+            }
+
+            int lastRequest = -1;
+
+            for (int i = 0; i < board.Count; i++)
+            {
+                if (!board.TryGet(i, out DocumentRequest row))
+                    continue;
+
+                if (row.RequestId != lastRequest)
+                {
+                    lastRequest = row.RequestId;
+                    Log($"request {row.RequestId}");
+                }
+
+                Log($"    {SpecName(row.SpecIndex)}{row.Number}");
+            }
+
+            Log($"{board.Count} row(s), {board.RequestCount} live, {board.RequestsMade} written this round.");
+        }
+
+        /// <summary>
+        /// <c>score &lt;team&gt; &lt;points&gt;</c>
+        /// </summary>
+        /// <remarks>
+        /// The stand-in for delivery and for the patience penalty, so a scoring test does not
+        /// need a customer. Points may be negative, and the before/after pair is printed because
+        /// <see cref="ScoreBoard.ServerAward"/> refuses to move anything once the round is over —
+        /// a line that shows no change is how that shows up as a fact rather than as a guess.
+        /// </remarks>
+        private void Award(string[] parts)
+        {
+            if (!RequireServer())
+                return;
+
+            ScoreBoard board = ScoreBoard.Instance;
+            if (board == null)
+            {
+                Log("no ScoreBoard in the scene.");
+                return;
+            }
+
+            if (parts.Length < 3)
+            {
+                Log("usage: score <team> <points>");
+                return;
+            }
+
+            if (!TryParse(parts[1], "team", out int team))
+                return;
+            if (!TryParse(parts[2], "points", out int points))
+                return;
+
+            if (team < 0 || team >= board.TeamCount)
+            {
+                Log($"no team {team}; this board scores {board.TeamCount} of them.");
+                return;
+            }
+
+            int before = board.ScoreOf(team);
+            board.ServerAward(team, points);
+
+            Log($"team {team}: {before} -> {board.ScoreOf(team)}");
+        }
+
+        /// <summary>
+        /// <c>round</c>
+        /// </summary>
+        /// <remarks>
+        /// Puts the clock and the board back to the start of a round. **Documents and unlocks are
+        /// deliberately left alone**: a document is a permanent record of something that was
+        /// named, and the store's own remarks say it is never removed — so a restart numbers its
+        /// first contract after the last round's, which is untidy and harmless. Unlocks have their
+        /// own command.
+        /// </remarks>
+        private void ResetRound()
+        {
+            if (!RequireServer())
+                return;
+
+            ScoreBoard board = ScoreBoard.Instance;
+            if (board == null)
+            {
+                Log("no ScoreBoard in the scene.");
+                return;
+            }
+
+            RequestBoard requests = RequestBoard.Instance;
+            requests?.ServerClear();
+
+            board.ServerReset();
+
+            Log($"round reset: {board.TeamCount} team(s) back to 0, {Mathf.RoundToInt(board.Remaining)}s on the clock, " +
+                $"{requests?.Count ?? 0} request row(s) left. Documents and unlocks were not touched.");
+        }
+
+        /// <summary>
+        /// Names a kind of document by its catalogue index.
+        /// </summary>
+        /// <remarks>
+        /// The index is printed when there is no catalogue wired or it points at nothing, matching
+        /// how the HUD falls back. It still tells a tester which entry is which.
+        /// </remarks>
+        private string SpecName(int specIndex)
+        {
+            DocumentStore store = DocumentStore.Instance;
+
+            if (store == null || !store.TryGetSpecAt(specIndex, out DocumentCatalogue.Spec spec))
+                return $"kind {specIndex} ";
+
+            return $"{spec.DisplayName} ";
+        }
+
+        /// <summary>
         /// <c>queue &lt;printer&gt; &lt;document&gt;</c>
         /// </summary>
         /// <remarks>
@@ -1208,6 +1485,39 @@ namespace Overworked.Dev
             }
         }
 
+        /// <summary>
+        /// The request tiers <c>tier</c> writes from.
+        /// </summary>
+        /// <remarks>
+        /// The same assignment-then-find arrangement as <see cref="Catalogue"/>, and for the same
+        /// reason: until the customer spawner is in the scene, no object holds a reference to this
+        /// asset, so the console would otherwise be unable to write a request at all.
+        /// </remarks>
+        private RequestCatalogue RequestTiers
+        {
+            get
+            {
+                if (_requestCatalogue != null)
+                    return _requestCatalogue;
+
+#if UNITY_EDITOR
+                if (_foundRequestCatalogue == null)
+                {
+                    string[] found = UnityEditor.AssetDatabase.FindAssets($"t:{nameof(RequestCatalogue)}");
+                    if (found.Length > 0)
+                    {
+                        _foundRequestCatalogue = UnityEditor.AssetDatabase.LoadAssetAtPath<RequestCatalogue>(
+                            UnityEditor.AssetDatabase.GUIDToAssetPath(found[0]));
+                    }
+                }
+
+                return _foundRequestCatalogue;
+#else
+                return null;
+#endif
+            }
+        }
+
         // ------------------------------------------------------------------ helpers
 
         /// <summary>
@@ -1381,6 +1691,38 @@ namespace Overworked.Dev
                         result.Add(id.ToString());
                 }
 
+                return result;
+            }
+
+            if (verb == "tier" && position == 1)
+            {
+                RequestCatalogue tiers = RequestTiers;
+                if (tiers != null)
+                {
+                    for (int i = 0; i < tiers.Count; i++)
+                        result.Add(i.ToString());
+                }
+
+                return result;
+            }
+
+            if (verb == "score" && position == 1)
+            {
+                ScoreBoard board = ScoreBoard.Instance;
+                int teamCount = board != null ? board.TeamCount : 0;
+
+                for (int i = 0; i < teamCount; i++)
+                    result.Add(i.ToString());
+
+                return result;
+            }
+
+            if (verb == "score" && position == 2)
+            {
+                /* The two numbers the round actually moves by, so the common cases are one Tab
+                 * each. Anything else can still be typed. */
+                result.Add("10");
+                result.Add("-5");
                 return result;
             }
 

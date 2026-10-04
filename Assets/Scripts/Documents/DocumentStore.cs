@@ -153,10 +153,33 @@ namespace Overworked.Documents
         {
             spec = default;
 
-            if (_catalogue == null || !TryGet(id, out DocumentRecord record))
+            if (!TryGet(id, out DocumentRecord record))
                 return false;
 
-            return _catalogue.TryGet(record.SpecIndex, out spec);
+            return TryGetSpecAt(record.SpecIndex, out spec);
+        }
+
+        /// <summary>
+        /// Returns a kind by its catalogue index, or false when there is no such kind.
+        /// </summary>
+        /// <remarks>
+        /// The same lookup as <see cref="TryGetSpec"/> for a caller that already has a kind index
+        /// and no document to go through — a request names a kind before any document it might
+        /// resolve to is in hand, and the readout that prints what a customer is waiting for has
+        /// nothing but the index.
+        ///
+        /// It belongs here next to the other lookup rather than on each reader, for the reason
+        /// the class remarks already give: a catalogue held by four components is four chances to
+        /// wire the wrong asset, and a wrong asset does not crash — it renames documents.
+        /// </remarks>
+        public bool TryGetSpecAt(int specIndex, out DocumentCatalogue.Spec spec)
+        {
+            spec = default;
+
+            if (_catalogue == null)
+                return false;
+
+            return _catalogue.TryGet(specIndex, out spec);
         }
 
         /// <summary>

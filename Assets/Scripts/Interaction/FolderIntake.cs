@@ -123,7 +123,10 @@ namespace Overworked.Interaction
             if (_grabbable.State == GrabbableState.Held)
                 return;
 
-            GrabbableSpawner.CollectLooseGrabbables(_grabbable.NetworkManager, _scanBuffer);
+            /* The box and the "who counts" rules are shared with every other intake in the game —
+             * see IntakeVolume. Everything below is this machine's own question: is it a document,
+             * and is it this folder's team. */
+            IntakeVolume.CollectInside(_grabbable.NetworkManager, transform, _centre, _halfExtents, _scanBuffer);
 
             for (int i = 0; i < _scanBuffer.Count; i++)
                 TryFile(_scanBuffer[i]);
@@ -132,11 +135,15 @@ namespace Overworked.Interaction
         }
 
         /// <summary>
-        /// Server: files one object if it is a document and it is in the box.
+        /// Server: files one object if it is a document belonging to this folder's team.
         /// </summary>
         /// <remarks>
-        /// The order of the checks is the order of how cheap they are, and the last one is the
-        /// only one that changes the world.
+        /// "In the box" is already settled — <see cref="IntakeVolume.CollectInside"/> only hands
+        /// over things that are. The order of the checks below is the order of how cheap they are,
+        /// and the last one is the only one that changes the world.
+        ///
+        /// The self check is load-bearing even so: a folder lying on the floor is loose, and its
+        /// own origin is inside its own box, so without it every folder would try to file itself.
         /// </remarks>
         /// <returns>True when the document went in.</returns>
         private bool TryFile(NetworkGrabbable grabbable)
@@ -151,9 +158,6 @@ namespace Overworked.Interaction
             if (dataId < 0)
                 return false;
 
-            if (!IsInsideBox(grabbable.transform.position))
-                return false;
-
             /* Full, or no container to speak of: the document stays in the world where its owner
              * can still pick it back up. The same rule every intake in the project follows —
              * nothing fed to a machine is destroyed for want of a slot, or for a mistake in the
@@ -166,22 +170,6 @@ namespace Overworked.Interaction
              * prefab. Same as the printer's intake. */
             grabbable.NetworkObject.Despawn(DespawnType.Destroy);
             return true;
-        }
-
-        /// <summary>
-        /// True when a world position falls inside the box.
-        /// </summary>
-        /// <remarks>
-        /// Measured in this object's own space, so the box turns and moves with the folder rather
-        /// than being a fixed patch of floor.
-        /// </remarks>
-        private bool IsInsideBox(Vector3 worldPosition)
-        {
-            Vector3 offset = transform.InverseTransformPoint(worldPosition) - _centre;
-
-            return Mathf.Abs(offset.x) <= _halfExtents.x
-                && Mathf.Abs(offset.y) <= _halfExtents.y
-                && Mathf.Abs(offset.z) <= _halfExtents.z;
         }
     }
 }

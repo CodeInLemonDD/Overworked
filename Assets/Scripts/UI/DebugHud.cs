@@ -5,6 +5,7 @@ using Overworked.Containers;
 using Overworked.Documents;
 using Overworked.Interaction;
 using Overworked.Player;
+using Overworked.Stations;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
@@ -12,8 +13,9 @@ using UnityEngine.UI;
 namespace Overworked.UI
 {
     /// <summary>
-    /// A read-only debug overlay: what every container is holding, where the local player's
-    /// stamina sits, and what the player is aiming at.
+    /// A read-only debug overlay: the round's clock and scores, what the customers are asking
+    /// for, what every container is holding, where the local player's stamina sits, and what the
+    /// player is aiming at.
     /// </summary>
     /// <remarks>
     /// The whole hierarchy is built in code — canvas, panel, text — rather than authored into
@@ -308,11 +310,128 @@ namespace Overworked.UI
 
             _builder.Clear();
 
+            AppendRound(_builder);
             AppendContainers(_builder);
             AppendStamina(_builder);
             AppendAim(_builder);
 
             _text.SetText(_builder);
+        }
+
+        /// <summary>
+        /// Writes the clock, the scores and what the customers are asking for.
+        /// </summary>
+        /// <remarks>
+        /// First in the panel because it is the only part of this readout that is about the round
+        /// rather than about the player standing in front of the machine, and during a scoring
+        /// test it is the line being watched.
+        ///
+        /// Silent when there is no board, which is the normal state of a scene that has not
+        /// spawned yet. Nothing here decides anything — both boards are read-only from outside,
+        /// and everything that moves a score is a [Server] call somewhere else.
+        /// </remarks>
+        private void AppendRound(StringBuilder builder)
+        {
+            ScoreBoard board = ScoreBoard.Instance;
+            if (board == null)
+                return;
+
+            float remaining = Mathf.Max(board.Remaining, 0f);
+            int minutes = Mathf.FloorToInt(remaining / 60f);
+            int seconds = Mathf.FloorToInt(remaining - minutes * 60f);
+
+            builder.Append("回合  ");
+            builder.Append(minutes.ToString("00"));
+            builder.Append(':');
+            builder.Append(seconds.ToString("00"));
+
+            for (int team = 0; team < board.TeamCount; team++)
+            {
+                builder.Append("   队");
+                builder.Append(team);
+                builder.Append(' ');
+                builder.Append(board.ScoreOf(team));
+            }
+
+            /* The result only exists once the clock is out, and a round that ended level is a
+             * different thing from one nobody has won yet — hence the two sentinels rather than
+             * one. */
+            int winner = board.Winner;
+
+            if (winner >= 0)
+            {
+                builder.Append("   胜 队");
+                builder.Append(winner);
+            }
+            else if (winner == ScoreBoard.Draw)
+            {
+                builder.Append("   平局");
+            }
+
+            AppendRequests(builder);
+        }
+
+        /// <summary>
+        /// Writes one line per live request.
+        /// </summary>
+        /// <remarks>
+        /// Grouped by walking the rows and starting a new line whenever the request id changes,
+        /// which works because the board keeps each request's rows adjacent — see
+        /// <see cref="RequestBoard"/>. Going through <c>TryGetWanted</c> per request instead would
+        /// mean knowing the ids first, and the ids are not what is being listed.
+        /// </remarks>
+        private void AppendRequests(StringBuilder builder)
+        {
+            RequestBoard board = RequestBoard.Instance;
+            if (board == null)
+                return;
+
+            if (board.Count == 0)
+            {
+                builder.Append("\n需求  无");
+                return;
+            }
+
+            int lastRequest = -1;
+
+            for (int i = 0; i < board.Count; i++)
+            {
+                if (!board.TryGet(i, out DocumentRequest row))
+                    continue;
+
+                if (row.RequestId == lastRequest)
+                {
+                    builder.Append(" · ");
+                }
+                else
+                {
+                    lastRequest = row.RequestId;
+                    builder.Append("\n需求 ");
+                    builder.Append(row.RequestId);
+                    builder.Append("  ");
+                }
+
+                builder.Append(SpecName(row.SpecIndex));
+                builder.Append(row.Number);
+            }
+        }
+
+        /// <summary>
+        /// Names a kind of document by its catalogue index.
+        /// </summary>
+        /// <remarks>
+        /// The index is printed when there is no catalogue wired or it points at nothing, matching
+        /// <see cref="DocumentName"/>: it still tells a tester which entry is which, and it keeps
+        /// the readout honest instead of showing the same placeholder for every unknown kind.
+        /// </remarks>
+        private static string SpecName(int specIndex)
+        {
+            DocumentStore store = DocumentStore.Instance;
+
+            if (store == null || !store.TryGetSpecAt(specIndex, out DocumentCatalogue.Spec spec))
+                return $"种类 {specIndex} ";
+
+            return $"{spec.DisplayName} ";
         }
 
         /// <summary>
