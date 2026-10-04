@@ -22,14 +22,18 @@ namespace Overworked.Documents
     /// and the panel shows three rows, two of them greyed — the player can see what the job wants
     /// before they have any of it, which is what makes the job a plan rather than a surprise.
     ///
-    /// **A request grants what it names.** The gap above is what makes a job a plan, and it is
-    /// also a trap the moment the thing doing the naming forgets the second half: a customer asks
-    /// for contract 1, the document appears on the panel, and nothing can be printed, because
-    /// naming put it in the store and nothing put it in anybody's hands. So whoever writes a
-    /// request — the customer spawner, and the console command that stands in for it — grants the
-    /// documents it creates, **for every team**, because a request names a kind and a number and
-    /// each side resolves that name against its own copy. An NPC that hands over a file without a
-    /// request is the case that still needs an explicit <see cref="ServerUnlock"/>.
+    /// **Taking a job is what grants what the job asks for, and only to the team that took it.**
+    /// The gap above is what makes a job a plan, and it is also the whole contest: a customer that
+    /// appeared already handing its paperwork round would be a race nobody had to run, and both
+    /// sides would be holding the same documents. So naming and granting are kept apart at exactly
+    /// the point that matters — the spawner names, <see cref="Npc.Customer.ServerAccept"/> grants.
+    ///
+    /// Nothing has to say "for this team". A grant is a document id, document ids are per team, and
+    /// two sides' identically-named contracts are two different ids — so granting one team's copy
+    /// leaves the other team's exactly as locked as it was.
+    ///
+    /// An NPC handing over a file that no request named — a colleague trading one document for
+    /// another — is the case that still needs an explicit <see cref="ServerUnlock"/>.
     ///
     /// **It holds document ids, not catalogue indices.** A kind is not something a player earns;
     /// an Excel is. Two teams earning "Excel" separately earn two different documents, and a list

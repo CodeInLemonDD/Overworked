@@ -494,7 +494,55 @@ namespace Overworked.Npc
              * wrong clock reads as the press having done nothing. */
             _remaining[team] = _patienceSeconds;
 
+            /* **Taking the job is what hands the paperwork over.** The customer said what it wanted
+             * when it appeared, and saying it is not giving it: the documents are named in the
+             * round from that moment, and none of them can be printed until somebody stands here
+             * and asks for the work. That gap is the whole contest — a request that arrived already
+             * printable would be a race nobody had to run, and both sides would be holding the
+             * same papers.
+             *
+             * **This team's copies, and only this team's.** A request names a kind and a number
+             * because both sides have one of each; the ids behind those names are different
+             * documents, so granting one team's leaves the other team's exactly as locked as they
+             * were. Nothing needs to say "for team X" — the ids already do. */
+            Grant(team);
+
             return true;
+        }
+
+        /// <summary>
+        /// Server: hands a team the documents the request names.
+        /// </summary>
+        /// <remarks>
+        /// The name has to be resolved back to an id first: a request holds a kind and a number and
+        /// deliberately no id, so this is the one direction that needs
+        /// <see cref="DocumentStore.TryFind"/>. A row the store cannot resolve is skipped rather
+        /// than reported — it means the request was written against a catalogue that has since
+        /// changed, which <see cref="Documents.DocumentStore"/>'s own remarks call a wiring mistake
+        /// worth seeing once rather than a state to handle on every press.
+        ///
+        /// Uses the same scratch buffer <see cref="Meets"/> does. Safe because this runs from a
+        /// press and that runs from the delivery scan, and neither is reached from inside the other.
+        /// </remarks>
+        private void Grant(int team)
+        {
+            RequestBoard board = RequestBoard.Instance;
+            DocumentStore store = DocumentStore.Instance;
+            DocumentUnlocks unlocks = DocumentUnlocks.Instance;
+
+            if (board == null || store == null || unlocks == null)
+                return;
+
+            if (!board.TryGetWanted(_requestId.Value, _wantedBuffer))
+                return;
+
+            for (int i = 0; i < _wantedBuffer.Count; i++)
+            {
+                DocumentRequest row = _wantedBuffer[i];
+
+                if (store.TryFind(row.SpecIndex, row.Number, team, out int id))
+                    unlocks.ServerUnlock(id);
+            }
         }
 
         /// <summary>

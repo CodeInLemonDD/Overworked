@@ -183,6 +183,44 @@ namespace Overworked.Documents
         }
 
         /// <summary>
+        /// Returns the id of the document with a given kind, number and team.
+        /// </summary>
+        /// <remarks>
+        /// The reverse of what everything else here does. Everywhere else starts with an id and
+        /// asks what it is; this starts with a **name** — "this team's contract 1" — and asks which
+        /// document that is. It is the only place that question can be answered, because a name is
+        /// only unique within a team and the store is the only thing holding all three fields
+        /// together.
+        ///
+        /// A request could not be turned into anything without it. A request names a kind and a
+        /// number and deliberately holds no id — see <see cref="DocumentRequest"/> — so anything
+        /// that has to act on the documents a request names, in one team's copies rather than both,
+        /// has to resolve the name first.
+        ///
+        /// The scan goes forwards, so with two documents that somehow share a name the earliest one
+        /// wins. That cannot happen through <see cref="ServerCreate"/>, which numbers by scanning
+        /// for the highest and adding one; it is said out loud because the alternative is a lookup
+        /// whose answer depends on which end it started from.
+        /// </remarks>
+        /// <returns>False when no document of that team has that name.</returns>
+        public bool TryFind(int specIndex, int number, int team, out int documentId)
+        {
+            for (int id = 0; id < _documents.Count; id++)
+            {
+                DocumentRecord record = _documents[id];
+
+                if (record.SpecIndex != specIndex || record.Number != number || record.Team != team)
+                    continue;
+
+                documentId = id;
+                return true;
+            }
+
+            documentId = -1;
+            return false;
+        }
+
+        /// <summary>
         /// Server: names a document and returns its id.
         /// </summary>
         /// <param name="specIndex">Which kind of document it is, from the catalogue.</param>

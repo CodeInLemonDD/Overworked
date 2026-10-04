@@ -203,19 +203,16 @@ namespace Overworked.Npc
                             int id = store.ServerCreate(entry.SpecIndex, team);
                             store.TryGet(id, out DocumentRecord record);
 
-                            /* **The request is what grants the file.** Naming a document puts it in
-                             * the round's list; it does not let anybody print it, because the
-                             * computer refuses anything that has not been handed over. Without this
-                             * the customer asks for something that cannot be obtained — the panel
-                             * shows it, greyed, and clicking it does nothing.
+                            /* **Nothing is granted here, and that is the point.** A customer
+                             * saying what it wants is not the same as a customer handing anything
+                             * over: the document is named, and stays unprintable, until somebody
+                             * walks up to this customer and takes the job. Granting at this moment
+                             * was the first thing this did, and it handed both teams the whole
+                             * request the instant it appeared — a race nobody had to run, and the
+                             * other side's paperwork sitting on your own computer.
                              *
-                             * Both teams, because the request is shared: it names a kind and a
-                             * number, and each side resolves that name against its own copy. The
-                             * customer said "bring me contract 1" to whoever is listening, so
-                             * whoever is listening may go and get theirs. */
-                            DocumentUnlocks unlocks = DocumentUnlocks.Instance;
-                            if (unlocks != null)
-                                unlocks.ServerUnlock(id);
+                             * What a team gets, it gets on <see cref="Customer.ServerAccept"/>,
+                             * and it gets its own copies. */
 
                             if (team == 0)
                             {
