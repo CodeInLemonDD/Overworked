@@ -11,6 +11,19 @@
 
 **不做的**:教程、多张地图、道具系统、章笔、电源分区。
 
+> ## 进度:10-04 下午
+>
+> **P0 已完成并推上 main**(`139b1c0`)。冻结的接口在第四节,和实际代码**逐字一致**,
+> 有出入的地方都标了 ✅ 和说明。
+>
+> 已经落地的:P0 五个文件、`IntakeVolume` 的**两处接线**(打印机和文件夹,不用你们改了)、
+> HUD 的回合行、控制台的 `tier` / `requests` / `score` / `round`。
+>
+> **还没落地**:客户、交付、箱子吐带队文件夹。就是下面 W1/W2/W3 的活。
+>
+> **你现在就能验**:编辑器里摆 `RequestBoard` 和 `ScoreBoard` 两个场景物体、
+> 建一个 `RequestCatalogue` 资产(附录里是清单),然后 `tier` / `requests` / `score`。
+
 > **交互(已定):** 客户按 E 是**接单**(把要求告诉你);**交付是脱手的文件夹碰到他** —— 和打印机一样。
 > 之所以不能按 E 交付,是那条老规矩——**E 在持物时只走放下/投掷**,永远到不了工位。
 > 所以客户同时是一个 `StationBase`(管 E)和一个进料工位(管投喂)。
@@ -146,7 +159,7 @@ B 队的合同 1 —— 那这单算谁的?
 
 ---
 
-## 三、要抽出来的东西(第三次了)
+## 三、要抽出来的东西(第三次了)—— ✅ 已完成
 
 **交付是第三个盯着盒子看的进料工位**(打印机、文件夹、客户)。
 `CONSTRAINTS.md` 写着「第三个出现时应该抽成组件」,上次抽的时候发现**该抽的只有一半**。
@@ -164,10 +177,14 @@ public static class IntakeVolume
         Vector3 centre,
         Vector3 halfExtents,
         List<NetworkGrabbable> buffer);
+
+    /// 一个世界坐标在不在盒子里。用来回答关于**某一个**物体的问句。
+    public static bool Contains(
+        Transform space, Vector3 centre, Vector3 halfExtents, Vector3 worldPosition);
 }
 ```
 
-**打印机和 `FolderIntake` 都要改成调它**(它们现在各写了一遍盒子判定)。
+**打印机和 `FolderIntake` 已经改成调它了** —— P0 做掉了,不留给你,免得漏。
 **接不接受仍然是各自的**:打印机看 payload 索引,文件夹看 `DataId` 和队伍,客户看「是不是文件夹」。
 
 ---
@@ -200,7 +217,8 @@ public class RequestBoard : NetworkBehaviour
     public static RequestBoard Instance { get; }
 
     public int Count { get; }                                     // 有几行
-    public int RequestCount { get; }                              // 有几条需求
+    public int RequestCount { get; }                              // 有几条**在场上**的需求
+    public int RequestsMade { get; }                              // 这一回合**写过**几条(难度游标)
     public bool TryGet(int index, out DocumentRequest request);   // 按行读
     public bool TryGetWanted(int requestId, List<DocumentRequest> buffer);   // 一条需求的全部行
 
@@ -208,11 +226,32 @@ public class RequestBoard : NetworkBehaviour
 
     [Server] public int ServerCreate(IReadOnlyList<DocumentRequest> wanted);  // 调用方填 Spec/Number,返回 requestId
     [Server] public bool ServerRemove(int requestId);
+    [Server] public void ServerClear();                           // 清空,并把难度游标归零
 }
 ```
 
+> **`RequestsMade` 和 `RequestCount` 不是一回事,这是刻意的。**
+> `RequestCount` 数的是**场上还挂着的**需求;`RequestsMade` 数的是**这一回合写过几条**,只增不减。
+> **难度取的是后者**:客户走了不该让这一局变简单。客户生成器读的是**创建之前**的 `RequestsMade`,
+> 那个数就是当前该用的层号(从 0 数)。
+
 **需求不创建文档。** 客户开口的时候,那些文档**必须已经存在** —— 由客户生成器调
 `DocumentStore.ServerCreate` 建好,再拿它们的 `{SpecIndex, Number}` 组一条需求出来。
+
+> **为什么两队一定拿到同一个编号:** 全场所有文档都是生成器成对建的(每个 team 各一次),
+> 玩家只印不改名,所以两队的编号天然同步。这是**推论**,不是假设 —— 生成器建完要核一下
+> (team 1 的号 != team 0 的号就 `LogError`),因为这个错误在交付对不上之前完全看不见。
+> 控制台的 `tier` 命令已经按这个形状写好了,**照抄它**。
+
+### `DocumentStore` 加了一个方法
+
+```csharp
+/// 按**种类索引**直接取种类(不给文档 id)。
+public bool TryGetSpecAt(int specIndex, out DocumentCatalogue.Spec spec);
+```
+
+需求行里只有 `SpecIndex`,没有文档 id,所以光靠 `TryGetSpec(id, ...)` 拿不到名字。
+和原来那个放在一起,理由和类注释里写的一样:每个读取方各自持有一份 catalogue = 四次接错资产的机会。
 
 ### `RequestCatalogue`(ScriptableObject)—— 递增的需求序列
 
@@ -245,7 +284,7 @@ public class RequestCatalogue : ScriptableObject
 **「合同 ×2」展开成「合同 1、合同 2」**。两队各自有自己那份合同 1 和合同 2,
 需求说的是名字,不是某一队的哪一份。
 
-### `Customer`(NetworkBehaviour,场景里一个)
+### `Customer`(StationBase,场景里一个)
 
 ```csharp
 public enum CustomerPhase : byte { Idle = 0, Working = 1, Failed = 2 }
@@ -259,47 +298,72 @@ public class Customer : StationBase
     public float RemainingFor(int team);     // 那个队的耐心钟。没接时是 0
     public float WaitingRemaining { get; }   // 「还没被接手」的钟
 
-    /// 这一摞文档够不够这条需求。**纯判定,不消耗任何东西。**
-    public bool Meets(int team, IReadOnlyList<int> documentIds);
+    /// 这个文件夹够不够这条需求。**纯判定,不消耗任何东西。**
+    public bool Meets(int team, NetworkGrabbable folder);
 
     [Server] public bool ServerAccept(int team);                       // 按 E 接单
-    [Server] public bool ServerDeliver(int team, IReadOnlyList<int> documentIds);
+    [Server] public bool ServerDeliver(int team, NetworkGrabbable folder);
 }
 ```
+
+> **⚠️ 改了两处,以这里为准。**
+>
+> **① 没有 `DeliveryZone.cs` 了。** 客户**自己**就是那个进料工位:它已经是一个
+> `StationBase`(有碰撞体、E 扫得到),再挂一个 `IntakeVolume` 盒子就同时管住了投喂 ——
+> 这正是规格开头那句「客户同时是一个 StationBase 和一个进料工位」。多开一个组件就多一条
+> 跨窗口的缝,而这条缝没有任何东西需要。
+>
+> **② `ServerDeliver` 收的是文件夹,不是 id 列表。** 收下文件夹、销毁它、删需求、加分、
+> 让客户进下一相,这几件事**必须一起发生**,否则「文件夹没了但分没加」这类中间态会真的出现。
+> 让调用方传一串 id 就把这段拆成两半了。`Meets` 保留成纯判定,方便单独问「够不够」。
 
 **它是场上最有状态的东西** —— 每队一个 `Phase` 和一个钟,外加一个等待钟。
 钟由**服务端权威**跑(和 `ScoreBoard` 同一个理由),每秒写几次,客户端显示。
 
-**`Meets` 只回答「够不够」**:扣分、消耗文件夹、删需求、让客户离开,都是调用方的事。
-**队伍判定就在它里面** —— 那个文件夹是不是这个队的、里面那几份是不是这个队的。
+**`Meets` 只回答「够不够」,`ServerDeliver` 才动世界。**
+**队伍判定就在它们里面** —— 那个文件夹是不是这个队的、里面那几份是不是这个队的。
 让它能单独测,是这一轮最容易出错的地方。
+
+**盒子扫描要有个闸。** 客户扫的是 `IntakeVolume.CollectInside`,那是**全场**可抓物体的一遍遍历;
+4 个客户 × 每帧一遍是能跑但没必要。**没有任何队处于 `Working` 时直接不扫** ——
+既省掉大部分帧的遍历,又顺带把「没接单 → 不能交」变成了结构上做不到,而不是一条要记得写的判断。
 
 **头顶显示的是「你这个队」的钟**,不是统一的 —— 两个玩家看同一个客户,看到的倒计时不一样。
 
-### `ScoreBoard`(NetworkBehaviour,场景里一个)
+### `ScoreBoard`(NetworkBehaviour,场景里一个)—— ✅ 已完成
 
 ```csharp
 public class ScoreBoard : NetworkBehaviour
 {
+    public const int NoWinner = -1;   // 回合还没结束
+    public const int Draw = -2;       // 打平(包括两边都是 0 分)
+
     public static ScoreBoard Instance { get; }
 
-    public int ScoreOf(int team);
+    public int TeamCount { get; }
+    public int ScoreOf(int team);     // 不存在的队返回 0
     public float Remaining { get; }   // 秒。回合剩余时间
     public bool IsOver { get; }
-    public int Winner { get; }        // -1 = 还没分出来,-2 = 平局
+    public int Winner { get; }
 
-    public event Action ScoresChanged;
+    public event Action ScoresChanged;   // 分数变了,以及**回合结束那一次**
 
-    [Server] public void ServerAward(int team, int points);
-    [Server] public void ServerReset();       // 分数归零、钟重置
+    [Server] public void ServerAward(int team, int points);   // 负数就是扣分
+    [Server] public void ServerReset();                       // 分数归零、钟重置
 
-    // 序列化字段:回合时长(秒)、每个队伍的名字/颜色 —— 后者这轮可以不做
+    // 序列化字段:队伍数、回合时长(300)、发布间隔(0.2)
 }
 ```
 
-**钟是服务端权威的**,因为「什么时候结束」不能由各端自己算。**服务端每秒写几次 `Remaining`**,
-客户端显示它、两次更新之间用自己的 delta 平滑 —— 一个浮点数每秒写几次,和
-`Computer` 那个下载进度不是一回事(那个是「不写也能各自算对」,这个不能)。
+**钟是服务端权威的**,因为「什么时候结束」不能由各端自己算。**服务端每 0.2 秒写一次 `Remaining`**,
+客户端读到什么显示什么 —— 一个浮点数每秒写 5 次,和 `Computer` 那个下载进度不是一回事
+(那个是「不写也能各自算对」,这个不能)。
+
+**服务端自己用的是精确值,不是那个 0.2 秒前的值** —— 否则会晚 0.2 秒才判定回合结束。
+对内的读法已经封在 `Remaining` 里了,**不要自己去读同步字段**。
+
+**分数可以是负的**,没做下限。扣到负数不管,理由写在代码里:加了地板就等于对
+「本来就在输的那一队」免掉耐心惩罚,而那一队正是惩罚要管的对象。
 
 **`ScoreBoard` 不知道回合怎么跑**,只知道分数和时间。**谁交的货、交给谁,是别人的事。**
 
@@ -309,12 +373,36 @@ public class ScoreBoard : NetworkBehaviour
 
 | 窗口 | 独占文件 | 做什么 |
 |---|---|---|
-| **P0**(核心窗口) | `Documents/DocumentRequest.cs`、`Documents/RequestBoard.cs`、`Documents/RequestCatalogue.cs`、`Stations/ScoreBoard.cs`、`Interaction/IntakeVolume.cs` | 数据层 + 抽出来的判定 + 钟 |
-| **W1 客户** | `Npc/Customer.cs`、`Npc/CustomerSpawner.cs`、`Npc/RequestLabel.cs` | 客户实体、生成器、头顶显示 |
-| **W2 交付** | `Npc/DeliveryZone.cs`、`Interaction/FolderIntake.cs`、`Interaction/NetworkGrabbable.cs` | 收件区 + 文件夹分队 + 只装同队 |
-| **W3 接线** | `Stations/Printer.cs`、`Stations/SupplyBox.cs`、`Interaction/GrabbableSpawner.cs`、`Stations/Computer.cs` | 两个工位改用 `IntakeVolume`;箱子吐出带队的文件夹 |
+| **~~P0~~**(核心窗口) | ~~`DocumentRequest`、`RequestBoard`、`RequestCatalogue`、`ScoreBoard`、`IntakeVolume`~~ | ✅ **已完成并推上 main** |
+| **W1 客户**(关键路径) | `Npc/Customer.cs`、`Npc/CustomerSpawner.cs`、`Npc/RequestLabel.cs` | 客户实体(接单 + 收件 + 两个钟)、生成器、头顶显示 |
+| **W2 文件夹归队** | `Interaction/FolderIntake.cs`、`Interaction/NetworkGrabbable.cs` | 文件夹带队伍色、只收同队的文档 |
+| **W3 箱子与接线** | `Stations/SupplyBox.cs`、`Interaction/GrabbableSpawner.cs` | 箱子吐出带队的文件夹 |
 
-**P0 先做,做完接口冻结,其余三个再开。**
+**P0 已完成,接口冻结,三个窗口现在可以同时开。**
+
+> **W3 缩小了。** 原计划里的 `Stations/Printer.cs` 已由 P0 改完(打印机现在调 `IntakeVolume`),
+> 不用再动。`Stations/Computer.cs` 也**不在这一轮了** —— 它是「点名有哪些种类」,
+> 和「文件层」是两回事,这轮不动它。
+>
+> **W2 也别动 `IntakeVolume`** —— 它只加「队伍对不对」这一条判据。
+>
+> **W1 是关键路径,最重。** 其余两个是小的、独立的,可以和它并行。
+
+---
+
+## 五之二、控制台里已有的测试口
+
+P0 加了四条命令,**这是客户做出来之前唯一能验这一轮的办法**:
+
+| 命令 | 干什么 |
+|---|---|
+| `tier [n]` | 按第 n 层需求建文档并写一条需求;不填 n 就是「下一条」 |
+| `requests` | 列出场上所有需求和它们点名的文档 |
+| `score <team> <points>` | 加减分,打印 `before -> after` |
+| `round` | 分数归零、钟重置、需求清空(文档和解锁**故意不动**) |
+
+**`tier` 就是客户生成器的草稿。** 它读 `RequestsMade` 当层号、给每个 team 各建一份、
+核对编号一致、再写需求 —— W1 的生成器应该**长成同一个形状**,不同只在于触发时机。
 
 ---
 
@@ -346,6 +434,28 @@ public class ScoreBoard : NetworkBehaviour
 
 ## 附:用户在编辑器里要做的
 
+### 现在就能做(不用等任何窗口)
+
+| 物体 | 挂什么 |
+|---|---|
+| `RequestBoard` | 场景 NetworkObject(**不加 NetworkTransform**)+ `RequestBoard` |
+| `ScoreBoard` | 场景 NetworkObject(**不加 NetworkTransform**)+ `ScoreBoard` |
+| `RequestCatalogue` 资产 | 右键 → Create → Overworked → Request Catalogue |
+
+**`RequestCatalogue` 里先填三层就够测了**(层号从 0 数,`SpecIndex` 是 `DocumentCatalogue` 的下标):
+
+| 层 | 内容 | 意思 |
+|---|---|---|
+| 0 | `合同 ×1`, `Excel ×1` | 前 3 单 |
+| 1 | `合同 ×1`, `Excel ×2` | 第 4~8 单 |
+| 2 | `合同 ×2`, `Excel ×3`, `文档 ×1` | 第 9 单起 |
+
+按现在 `DocumentCatalogue.asset` 的下标:`合同`=0、`Excel`=1、`图片`=2、`文档`=3。
+**超出表长会自动重复最后一层**,所以三层够打通一整局。
+
+两个场景物体摆好之后:`tier` → `requests` → `score 0 10` → `round`,
+HUD 右上角应该出现 `回合 04:59   队0 0   队1 0` 和需求行。
+
 ### 客户**不生成、不销毁** —— 场景里摆几个位子
 
 「客户离开、新客户进场」**不要做成 spawn/despawn**。两个理由:
@@ -358,12 +468,10 @@ public class ScoreBoard : NetworkBehaviour
 空闲时走开或站到一边,接到需求时走回来、把要求显示出来,交完货换下一条。
 **进出场先做成「挪位置」,不要做成销毁重建。**
 
-### 要摆的东西
+### 要摆的东西(W1 落地之后)
 
 | 物体 | 挂什么 |
 |---|---|
-| `Customer`(×N) | `NetworkObject`(场景物体、**不加 NetworkTransform**)+ `Customer` + 一个碰撞体(E 要能扫到它,**没有碰撞体就按不了 E**)+ 一个挂 `RequestLabel` 的空子节点 |
-| `RequestBoard` | `NetworkObject`(场景、不加 NetworkTransform)+ `RequestBoard` |
-| `ScoreBoard` | `NetworkObject`(场景、不加 NetworkTransform)+ `ScoreBoard` |
+| `Customer`(×4) | `NetworkObject`(场景物体、**不加 NetworkTransform**)+ `Customer` + 一个碰撞体(E 要能扫到它,**没有碰撞体就按不了 E**)+ 一个挂 `RequestLabel` 的空子节点 |
 
 **客户的模型直接拿玩家模型。** 先别雕人。
