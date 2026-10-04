@@ -217,11 +217,16 @@ namespace Overworked.Interaction
         /// is, and the panel tells its own documents from the other side's by comparing against
         /// this.
         ///
-        /// It was a constant until this round, and a constant could not be tested at all — with
-        /// every player on one team, "number documents per team" and "refuse the other team" had
-        /// nothing to exercise them. **This is a test seam, not match making**: the console's
-        /// <c>team</c> command is the only thing that moves it, and assigning teams for real is a
-        /// later round, with a decision to make about documents a player is already holding.
+        /// It was a constant until the round that introduced documents, and a constant could not
+        /// be tested at all — with every player on one team, "number documents per team" and
+        /// "refuse the other team" had nothing to exercise them. It stayed a console-only value
+        /// for one round longer than that, which was enough to build a customer and everything
+        /// that delivers to one, and not enough to watch two sides race for the same customer.
+        /// <see cref="Player.TeamAssigner"/> is what closes that gap.
+        ///
+        /// The default stays 0 rather than -1, and that is load-bearing beyond this file: a
+        /// supply box stamps a folder with its asker's team, and a folder on team -1 files nothing
+        /// at all. A player who was somehow never assigned is on a real side rather than on none.
         /// </remarks>
         private readonly SyncVar<int> _team = new(0);
 
@@ -234,8 +239,16 @@ namespace Overworked.Interaction
         /// Server: puts this player on a team.
         /// </summary>
         /// <remarks>
-        /// Nothing in the game calls this yet; the console does, which is the point of it. Marked
-        /// [Server] rather than guarded by hand like the <c>ServerSet*</c> family on
+        /// Called by <see cref="Player.TeamAssigner"/> once, when the player appears, and by the
+        /// console whenever somebody wants a different answer. Both are intended: the assigner
+        /// writes a team and then leaves it alone, which is what keeps the console's override from
+        /// being quietly undone a quarter of a second later.
+        ///
+        /// Nothing happens to the documents a player is already carrying. Moving somebody across
+        /// sides mid-round leaves them holding the other team's paperwork, which is an argument
+        /// for the console command being a testing tool rather than a feature.
+        ///
+        /// Marked [Server] rather than guarded by hand like the <c>ServerSet*</c> family on
         /// NetworkGrabbable: those have to be callable between instantiating and spawning, and a
         /// player object is long since spawned by the time anyone asks about its team.
         /// </remarks>
