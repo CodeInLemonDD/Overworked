@@ -118,6 +118,18 @@ namespace Overworked.Stations
         /// </remarks>
         public int PayloadIndex => _payloadIndex;
 
+        /// <summary>
+        /// True when this box hands out containers — folders — rather than material.
+        /// </summary>
+        /// <remarks>
+        /// Asked of the catalogue rather than of the object, because the object does not exist
+        /// yet: the index is the only thing that can say what is about to be made, and the
+        /// catalogue is the one place an index means anything. With no catalogue assigned, or an
+        /// index it does not define, the answer is no — which is the same reading
+        /// <see cref="OnStartServer"/> reports on: this box hands out unmodified objects.
+        /// </remarks>
+        private bool HandsOutContainers => _catalogue != null && _catalogue.IsContainer(_payloadIndex);
+
         public override void OnStartNetwork()
         {
             base.OnStartNetwork();
@@ -268,6 +280,10 @@ namespace Overworked.Stations
         /// the same item whoever carried it to the machine, and feeding one in scores nothing.
         /// Ownership is a property of a finished document, which arrives from the computer
         /// already carrying a faction — not of the material that goes into the machine.
+        ///
+        /// A folder is the exception, and for the opposite reason: it is a container whose whole
+        /// job is to hold one side's paperwork, so it is stamped with the asking player's team.
+        /// See the call below for why that cannot be decided anywhere else.
         /// </remarks>
         protected override void OnServerInteract(PlayerInteraction player, NetworkConnection conn, bool longPress)
         {
@@ -280,7 +296,23 @@ namespace Overworked.Stations
             if (_container.Count == 0)
                 return;
 
-            NetworkObject nob = GrabbableSpawner.SpawnGrabbable(_payloadIndex, player.HandPosition, Quaternion.identity, conn);
+            /* A folder is stamped with the team of whoever asked for it. Which side's paperwork
+             * may go inside is the first thing that has to be true about one, and this is the only
+             * moment anybody knows it: the object is carried off, and nothing downstream has a
+             * player left to ask. Materials keep -1, which leaves the look alone — a sheet of paper
+             * coloured by faction would be a claim about who owns a shared pool.
+             *
+             * The stock cannot answer this and must not be asked to. Its entries are anonymous by
+             * design, and one box serves both sides out of one pool, so a team written in there
+             * would be whichever player happened to be standing at it when it restocked. */
+            int team = HandsOutContainers ? player.Team : -1;
+
+            NetworkObject nob = GrabbableSpawner.SpawnGrabbable(
+                _payloadIndex,
+                player.HandPosition,
+                Quaternion.identity,
+                conn,
+                variantTeam: team);
             if (nob == null)
                 return;
 

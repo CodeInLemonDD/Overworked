@@ -291,3 +291,67 @@ W1 的交接里写着「队列里没有别的途径能进文档 …… 建议优
 如果跑出来确实是方框,我建议用 **`√`(U+221A)而不是提示词写的 `[x]`**:`√` 单字符宽,
 而 `unlocks` 的标记是每行**第一个字符**,换成三字符的 `[x]` 会把整个列表推歪两格;
 `√` 是中文里惯用的对勾,而且我已经确认它在 simhei 里有字形。改一行,说一声就改。
+---
+
+# 第四轮 · 箱子与接线
+
+**状态**:代码完成。离线编译 **exit code 0 / 0 error / 3 warning**(3 条全是 CS0114 基线)。
+**文件**:`Stations/SupplyBox.cs`(改)。`Interaction/GrabbableSpawner.cs` **一个字没改** —— 理由见下。
+
+## 1. 改了什么
+
+```csharp
+int team = HandsOutContainers ? player.Team : -1;
+
+NetworkObject nob = GrabbableSpawner.SpawnGrabbable(
+    _payloadIndex, player.HandPosition, Quaternion.identity, conn, variantTeam: team);
+```
+
+`HandsOutContainers` = `_catalogue != null && _catalogue.IsContainer(_payloadIndex)` —— 问目录不问物体,
+因为物体还不存在,而索引是唯一能说明「马上造出来的是什么」的东西。
+
+材料那条路**零变化**:`variantTeam` 仍是 -1,于是 `SpawnGrabbable` 里 `variantNumber >= 0 || variantTeam >= 0`
+不成立,`ServerSetVariant` 根本不会被调用,prefab 保持原样。
+
+## 2. 文件夹走的是哪一条 —— 我查了,只有一条
+
+提示词说箱子里有两条给货路。按代码查下来,**对象只有一条路能出来**:
+
+| 谁 | 造物体的地方 | variantTeam |
+|---|---|---|
+| **箱子 E 键** | `SupplyBox.OnServerInteract` → `SpawnGrabbable` | **本次改**:容器类用 `player.Team`,材料 -1 |
+| 打印机取走产出 | `Printer` → `SpawnGrabbable` | `document.Team`(第三轮就有) |
+| 控制台 `spawn entity` / `give` | `DevConsole` → `SpawnGrabbable` | 命令行显式给 |
+| 开局撒的那批 | `GrabbableSpawner.SpawnAll` → `SpawnGrabbable` | 无(-1) |
+
+全项目 `SpawnGrabbable(` 一共 5 个调用点,就是上面这些(第 5 个是它自己的定义)。
+
+**`_container`(箱子的库存)不是第二条给货路 —— 它从来不变成物体。** 它是「还剩几件」的计数器:
+`OnServerInteract` 造出物体之后 `ServerTryRemoveLast()` 把它减一;库存里的条目是 `ForEntity(_payloadIndex)`,
+而**造物体时读的是字段 `_payloadIndex`,不是条目的 `PayloadIndex`** —— 条目连「造什么」都不参与决定,
+更不可能带上队伍。
+
+**另一条路上队伍会不会丢?** 那条路不产生物体,所以没有「丢」这回事。而且它**结构上带不了队伍**:
+`ContainerEntry` 没有队伍字段,一个箱子两队共用一份库存,写进条目的队伍只会是「上一次是谁来补的货」。
+所以队伍只能在造出来那一刻贴 —— 也就是现在这样。
+
+## 3. 场景里那个箱子确实配的是文件夹(核实过,不是推测)
+
+`PayloadCatalogue.asset` 里**只有 index 3 是 `IsContainer: 1`**,而 `SampleScene` 里两个 `Box.prefab` 实例
+分别把 `_payloadIndex` 覆盖成 **3**(文件夹)和 **1**(材料)。这条改动落在真实配置上,不是空转。
+
+## 4. 我拿不准的 / 要提醒的
+
+- **箱子没法自检「我本来该吐文件夹」。** 如果那个箱子的 `_catalogue` 没接,或者索引没被标成
+  `IsContainer`,文件夹会**没有颜色**地出来(team -1);而 `FolderIntake` 按队伍比对,
+  于是这个文件夹什么都装不进 —— 箱子和文件夹看起来都完全正常。**我没有加启动检查**:
+  「目录没接」在材料箱上是**合法配置**(`_payloadIndex = -1` 就是「按 prefab 原样」),
+  箱子分不出「我本该是文件夹箱」和「我是材料箱」。这条只能靠注释,写在 `HandsOutContainers` 上了。
+- **`Team` 默认 0 确实会掩盖一件事。** 决策 ③ 说服务端生成玩家时轮流分 0/1,那 0 和 1 都是真队伍,没问题。
+  但如果**那段分配代码没生效**,所有文件夹都会是 A 队 —— 而那是**看起来完全正常**的结果,
+  唯一症状是「B 队文件夹永远不出现」。你让我留意的那个掩盖,我确认它会以这个形状出现。
+- **控制台 `team -1` 会造出无色的文件夹。** team < 0 时 `PayloadLabel` 不上色,`FolderIntake` 拿 -1 去比,
+  于是它同样什么都装不进。这是测试口子的边界(第三轮那条命令没做范围检查),不是这轮改的东西。
+- **开局撒的那批(`_spawnCount: 4`)用的是 `_payloadIndex: -1`**,现在不会撒出文件夹。
+  哪天把它配成文件夹 payload,那批文件夹**没有玩家可问**,会是永久无色的。要不要加个警告,你说 ——
+  我没有自己加,那是「谁来决定它的队伍」的设计问题,不是接线问题。
