@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using FishNet.Managing.Timing;
 using FishNet.Object;
 using FishNet.Object.Synchronizing;
@@ -102,6 +102,18 @@ namespace Overworked.Stations
         private readonly SyncVar<float> _remaining = new(0f);
 
         /// <summary>
+        /// Whether the round has begun. Replicated, so every peer can tell "waiting for players"
+        /// from "playing" without guessing from the clock.
+        /// </summary>
+        /// <remarks>
+        /// The clock reading its full length is not the same fact — a board that has just been
+        /// reset is also showing the full length, and one of those two states is a match about to
+        /// start and the other is a match that has not been asked to. Only the server moves this,
+        /// through <see cref="ServerBeginRound"/>.
+        /// </remarks>
+        private readonly SyncVar<bool> _started = new(false);
+
+        /// <summary>
         /// Seconds left in the round, exactly, on the server.
         /// </summary>
         /// <remarks>
@@ -175,6 +187,17 @@ namespace Overworked.Stations
         /// no good explanation.
         /// </remarks>
         public bool IsOver => Remaining <= 0f;
+
+        /// <summary>
+        /// True once the round has begun.
+        /// </summary>
+        /// <remarks>
+        /// False until <see cref="ServerBeginRound"/>, which is what a match waiting on its
+        /// players looks like. Anything that should not be happening before the whistle reads this
+        /// — the customer spawner is the one that matters, because a round that seated customers
+        /// during the wait would be spending its own time limit on the wait.
+        /// </remarks>
+        public bool HasStarted => _started.Value;
 
         /// <summary>
         /// The team with the highest score once the round is over.
@@ -323,7 +346,7 @@ namespace Overworked.Stations
             if (team < 0 || team >= _scores.Count)
                 return;
 
-            if (IsOver)
+            if (!HasStarted || IsOver)
                 return;
 
             /* Read the element out, change the copy, write it back. The obvious
@@ -346,6 +369,13 @@ namespace Overworked.Stations
         ///
         /// Resetting the clock here rather than in a separate call, because a board with zeroed
         /// scores and no time on it is not a state anything wants to be in.
+        ///
+        /// **It does not start the round.** A reset is what a board does before a match — every
+        /// score back to zero, the full time on the clock, nobody moving — and the moment it
+        /// starts is <see cref="ServerBeginRound"/>, which something else decides. Folding the two
+        /// together was the first thing this did and it was wrong for a reason that is only visible
+        /// from outside: the round would begin the instant the server did, so a match that waits
+        /// for its players to pick sides would be spending its five minutes on the wait.
         /// </remarks>
         [Server]
         public void ServerReset()
@@ -357,7 +387,30 @@ namespace Overworked.Stations
 
             _exactRemaining = _roundSeconds;
             _writeTimer = 0f;
+            _running = false;
+            _started.Value = false;
+
+            _remaining.Value = _roundSeconds;
+        }
+
+        /// <summary>
+        /// Server: starts the clock.
+        /// </summary>
+        /// <remarks>
+        /// Called once, by <see cref="Match.MatchStarter"/>, at the moment the match actually
+        /// begins. Marked [Server] rather than folded into <see cref="ServerReset"/> for the reason
+        /// that method's remarks give.
+        /// </remarks>
+        [Server]
+        public void ServerBeginRound()
+        {
+            if (_started.Value)
+                return;
+
+            _exactRemaining = _roundSeconds;
+            _writeTimer = 0f;
             _running = true;
+            _started.Value = true;
 
             _remaining.Value = _roundSeconds;
         }

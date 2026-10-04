@@ -143,6 +143,14 @@ namespace Overworked.Npc
                 return;
             }
 
+            /* Nothing is asked for until the match begins. A round waiting on its players to pick
+             * sides is not a round yet, and seating customers through the wait would spend the
+             * round's own time limit on the waiting — the clock starts at the whistle, so the
+             * customers have to as well. Silence rather than a report: waiting is the normal state
+             * of a lobby, not a mistake. */
+            if (!scores.HasStarted)
+                return;
+
             /* Asked in this order so the common case — the office is already staffed — costs one
              * pass over the customers rather than two. */
             if (CountWaiting() >= _activeCount)

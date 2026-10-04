@@ -1,10 +1,11 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.Text;
 using FishNet;
 using FishNet.Managing;
 using FishNet.Object;
 using Overworked.Stations;
 using Overworked.Interaction;
+using Overworked.Match;
 using Overworked.Player;
 using Overworked.Documents;
 using Overworked.Containers;
@@ -176,7 +177,7 @@ namespace Overworked.Dev
         /// </summary>
         private static readonly string[] Verbs =
             { "spawn", "clear", "give", "tp", "pos", "team", "document", "docs", "queue", "printers",
-              "unlock", "unlocks", "tier", "requests", "score", "round", "help" };
+              "unlock", "unlocks", "tier", "requests", "score", "round", "start", "help" };
 
 #if UNITY_EDITOR
         /// <summary>
@@ -435,6 +436,10 @@ namespace Overworked.Dev
                     ResetRound();
                     return;
 
+                case "start":
+                    StartMatch();
+                    return;
+
                 default:
                     Log($"unknown command '{verb}'. Try 'help'.");
                     return;
@@ -462,7 +467,8 @@ namespace Overworked.Dev
             Log("tier [n]                                 write request n from the tier table (default: the next one)");
             Log("requests                                 list the live requests and what they name");
             Log("score <team> <points>                    move a team's score; negative takes points off");
-            Log("round                                    zero the scores and restart the clock");
+            Log("round                                    zero the scores and put the round back before the whistle");
+            Log("start                                    begin the match now, sides by turns (the one-player seam)");
             Log("help                                     this");
             Log("Coordinates are grid cells; objects land on the cell centre.");
         }
@@ -1117,6 +1123,47 @@ namespace Overworked.Dev
         }
 
         /// <summary>
+        /// <c>start</c>
+        /// </summary>
+        /// <remarks>
+        /// The seam that makes the game playable by one person. A match needs two equal sides, and
+        /// one player cannot make two equal sides — so a solo session would wait forever, which is
+        /// exactly the session somebody testing a printer is in. It is also what the game falls
+        /// back to when the scene has no zones yet.
+        ///
+        /// Sides by turns rather than by zone, because there is nothing to read a side off. After
+        /// this the <c>team</c> command can still move anybody it likes.
+        /// </remarks>
+        private void StartMatch()
+        {
+            if (!RequireServer())
+                return;
+
+            MatchStarter starter = MatchStarter.Instance;
+            if (starter == null)
+            {
+                Log("no MatchStarter in the scene.");
+                return;
+            }
+
+            ScoreBoard board = ScoreBoard.Instance;
+            if (board != null && board.HasStarted)
+            {
+                Log("the match has already started. 'round' puts it back first.");
+                return;
+            }
+
+            if (!starter.ServerForceStart())
+            {
+                Log("could not start the match.");
+                return;
+            }
+
+            Log($"match started by hand: the sides were handed out by turns, " +
+                $"{Mathf.RoundToInt(board != null ? board.Remaining : 0f)}s on the clock.");
+        }
+
+        /// <summary>
         /// <c>round</c>
         /// </summary>
         /// <remarks>
@@ -1144,7 +1191,8 @@ namespace Overworked.Dev
             board.ServerReset();
 
             Log($"round reset: {board.TeamCount} team(s) back to 0, {Mathf.RoundToInt(board.Remaining)}s on the clock, " +
-                $"{requests?.Count ?? 0} request row(s) left. Documents and unlocks were not touched.");
+                $"{requests?.Count ?? 0} request row(s) left. Documents and unlocks were not touched. " +
+                "The round is back before the whistle; 'start' begins it again.");
         }
 
         /// <summary>
