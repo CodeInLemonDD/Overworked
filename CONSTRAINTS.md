@@ -45,6 +45,7 @@
 | 6 | **`OnTick` 一帧可能跑 2–3 次,且可能掉 tick**(`_allowTickDropping` 不区分服务端)。计时一律用 `TimeManager_OnUpdate` + `Time.unscaledDeltaTime` | `TimeManager.cs:710-714, 718` |
 | 7 | **`SyncTimer` 不会自己走**,每个端都要调 `Update()` | `SyncTimer.cs:421-425` |
 | 8 | **场景里的 `NetworkObject` 会自动生成** —— 包括**拖进场景的 prefab 实例**(`CreateSceneId` 只在 `IsPartOfPrefabAsset` 时跳过,实例不算)。客户端会先 `SetActive(false)`,收到 spawn 消息后**复用同一实例** | `ServerObjects.cs:405-493`;`ClientObjects.cs:249-252`;`NetworkObject.Serialized.cs:159-215` |
+| 8b | **但 `SceneId` 为 0 的会被静默跳过** —— `IsSceneObject => SceneId != 0`,而收集场景物体的两处调用都传 `ignoreUnsetSceneIds: true`。**症状是「物体摆在场景里、什么都没发生、也不报错」**。复制出来的实例、或加过组件之后没重序列化的实例,都会落到这个状态。核对:`grep 'propertyPath: SceneId' Assets/Scenes/*.unity` | `NetworkObject.cs:82,360`;`Scenes.cs:49,63`;`ServerObjects.cs:372,438` |
 | 9 | **`NetworkObject.NetworkBehaviours: []` 是无害残留** —— 运行时按层级+组件顺序重建,发包走运行时属性。**往 prefab 加组件不需要 Editor 刷新** | `NetworkObject.cs:1002-1032`;`NetworkBehaviour.SyncTypes.cs:502` |
 | 10 | **`SyncList` 类型参数可以是自定义 struct**,但**字段必须 public** —— private / `[SerializeField] private` 会被 weaver **静默跳过**(编译通过、运行不同步)。也不能有 public 属性(有 get+set 会被一起序列化) | `SyncTypeProcessor.cs:399-437`;`TypeDefinitionExtensions.cs:31-62` |
 | 11 | **Scene 物件 `Despawn()` 退化成 `SetActive(false)`**,没有恢复路径。**永远不要 despawn 场景物件** | `ManagedObjects.cs:430-434` |
@@ -445,9 +446,18 @@ public bool IsFetching(int documentId);
 - **`DocumentRecord` 里没有外观、没有来源。** 那是**种类**的属性,拷进记录就是同一个事实的第二份拷贝 —— 而且**多条 spec 可以共用同一个 payload**(合同和报表都是那张纸),外观本来就分不出种类
 - **编号按 (种类, 队伍) 各自递增。** 红队的 Excel 1 和蓝队的 Excel 1 是两份不同的文档。
   **只按种类数是一个真 bug**:两队同时开工时编号会交替往下走,后动手的那队永远做不出自己的 Excel 1
-- **「点名」和「拿到」是两件事。** NPC 点名 → `ServerCreate` 建记录;玩家拿到 → `DocumentUnlocks.ServerUnlock`。
-  所以 `ServerBeginFetch` **不创建任何东西**,只是把一条已经存在的记录送进队列。
-  这个差就是面板上那些灰行的意义:任务点名三份,拿到一份,面板上三行、两行灰的
+- **「点名」和「拿到」是两件事,而且「谁发」是有主的。** NPC 点名 → `ServerCreate` 建记录;
+  **接单** → `DocumentUnlocks.ServerUnlock`。所以 `ServerBeginFetch` **不创建任何东西**,
+  只是把一条已经存在的记录送进队列。这个差就是面板上那些灰行的意义:任务点名三份,拿到一份,
+  面板上三行、两行灰的
+- **授权发生在「接单」那一刻,不是「客户开口」那一刻 —— 而且只给接单那一队。**
+  客户出现只写需求、只建记录,**两队都印不了**;哪一队走过去按 E,哪一队才拿到**自己那份**。
+  **不需要写「给某某队」**:解锁的是一个 document id,而 id 本来就按队分开,给 A 解锁 A 的那份,
+  B 的那份自动还是锁着的。做成「开口就发」是一个真 bug —— 双方同时拿到、谁都不用走过去,
+  这一轮的赛跑当场作废
+- **电脑面板 = 你的文件柜,不是回合的目录。** 只列「你这队 **且** 已授权」的文档。
+  **锁着的不是灰的,是没有。** 想成「回合里所有文件 + 灰行」是在回答另一个问题:
+  「回合里都有什么」,而玩家站在电脑前要问的是「我能印什么」
 - **`Data` 条目 = 文档,`Entity` 条目 = 原料。没有例外。** 让 `Entity` 也能带编号,「一份文档」就有了两种写法
 - **`DocumentStore` 是 id 变成「名字 / 外观 / 来源 / 耗时」的唯一地方。** 不要再给别的组件各发一份
   catalogue —— 那会变成四份各自可能接错的引用
