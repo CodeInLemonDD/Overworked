@@ -167,6 +167,17 @@ namespace Overworked.UI
         private const float HintFontSize = 18f;
 
         /// <summary>
+        /// What the document column says when there is nothing in it.
+        /// </summary>
+        /// <remarks>
+        /// The column is a list of what this team has been handed, so it is empty until somebody
+        /// takes a job — a state that has to say what to do about it. A blank column reads as a
+        /// broken panel, and what to do about it is not guessable from a computer: the paperwork
+        /// comes from a customer.
+        /// </remarks>
+        private const string EmptyDocumentsHint = "(还没有拿到任何文件 —— 去找客户接单)";
+
+        /// <summary>
         /// Background of a row that is not chosen.
         /// </summary>
         private static readonly Color RowColour = new(0.17f, 0.18f, 0.22f, 0.95f);
@@ -209,15 +220,25 @@ namespace Overworked.UI
         private RectTransform _panelRect;
 
         /// <summary>
-        /// Where the list rows go: the scrolling part of the window, inside the viewport.
+        /// Where the document rows go: the scrolling part of the left column.
         /// </summary>
         /// <remarks>
         /// A row's y is measured from the top of this rather than from the top of the window, and
-        /// its height on each rebuild is what tells the scroll bar how far there is to go. The
-        /// window's own furniture — title, headings, hint, close button — is deliberately not under
-        /// it; see <see cref="Build"/>.
+        /// its height on each rebuild is what tells that column's scroll bar how far there is to
+        /// go. The window's own furniture — title, headings, hint, close button — is deliberately
+        /// not under either of these; see <see cref="Build"/>.
         /// </remarks>
-        private RectTransform _content;
+        private RectTransform _documentContent;
+
+        /// <summary>
+        /// Where the printer rows go: the scrolling part of the right column.
+        /// </summary>
+        /// <remarks>
+        /// Separate from <see cref="_documentContent"/> so the two lists scroll apart. A job is
+        /// "this document, that machine", and one shared area carries the machines out of reach as
+        /// soon as the documents are longer than the window.
+        /// </remarks>
+        private RectTransform _printerContent;
 
         /// <summary>
         /// Rows built on the last rebuild, so they can be thrown away.
@@ -539,60 +560,34 @@ namespace Overworked.UI
              * the window rather than falling through to whatever is underneath. */
             background.raycastTarget = true;
 
-            /* The list scrolls; the window's own furniture does not.
+            /* Two lists, two scrollbars.
              *
-             * It needs to scroll because the list only grows. A document is never removed from the
-             * round — ids stay valid for as long as anything might be holding one — so a panel
-             * that draws them all runs off the bottom of the screen after a few jobs and stays
-             * there. The title, the two column headings, the hint and the close button are laid
-             * out against the panel instead, and the close button especially has to be: a window
-             * whose only way out can be scrolled out of reach is a window that traps whoever
-             * opened it.
+             * They scroll because a list only grows: a document is never removed from the round —
+             * ids stay valid for as long as anything might be holding one — so a panel that drew
+             * them all ran off the bottom of the screen after a few jobs and stayed there.
              *
-             * The viewport's bottom stops above the hint rather than at the padding line, so the
-             * line telling the player what to do is not the first thing to be covered. */
+             * **Separately, and that is the point rather than a detail.** One shared area carries
+             * the printer buttons out of reach the moment the document list is longer than the
+             * window, and the printers are the half the player is reaching for: a job is "this
+             * document, that machine", and having to scroll back to find the second half of the
+             * sentence is what made a two-document job feel like two visits. A level with eight
+             * printers beside thirty documents could not be worked at all with one bar.
+             *
+             * The title, the two headings, the hint and the close button are laid out against the
+             * window instead. The close button especially: a window whose only way out can be
+             * scrolled out of reach is a window that traps whoever opened it. */
             float hintHeight = HintFontSize * 1.6f;
-
-            GameObject viewportObject = new("Viewport", typeof(RectTransform));
-            viewportObject.transform.SetParent(_panelRect, worldPositionStays: false);
-
-            RectTransform viewportRect = (RectTransform)viewportObject.transform;
-            viewportRect.anchorMin = Vector2.zero;
-            viewportRect.anchorMax = Vector2.one;
-            viewportRect.offsetMin = new Vector2(0f, Padding + hintHeight);
-            viewportRect.offsetMax = new Vector2(0f, -(TitleHeight + HeaderHeight));
-
-            /* Clips what is scrolled past. Without it the rows keep being drawn over the window's
-             * edges and the whole thing reads as broken rather than as a list. */
-            viewportObject.AddComponent<RectMask2D>();
-
-            GameObject contentObject = new("Content", typeof(RectTransform));
-            contentObject.transform.SetParent(viewportRect, worldPositionStays: false);
-
-            _content = (RectTransform)contentObject.transform;
-
-            /* Pinned to the viewport's top edge and full width, growing downwards as rows are
-             * added. Rows are placed with the same anchor and pivot they always had, so a row's y
-             * is measured from the top of the list rather than from the top of the window. */
-            _content.anchorMin = new Vector2(0f, 1f);
-            _content.anchorMax = new Vector2(1f, 1f);
-            _content.pivot = new Vector2(0.5f, 1f);
-            _content.anchoredPosition = Vector2.zero;
-            _content.sizeDelta = new Vector2(0f, 0f);
-
-            ScrollRect scroll = panelObject.AddComponent<ScrollRect>();
-            scroll.content = _content;
-            scroll.viewport = viewportRect;
-            scroll.horizontal = false;
-            scroll.vertical = true;
-
-            /* Clamped rather than elastic: this is a reference list being read, not something to
-             * be flung about, and a list that bounces past its own end reads as a mistake. */
-            scroll.movementType = ScrollRect.MovementType.Clamped;
-            scroll.scrollSensitivity = 30f;
 
             float columnWidth = (PanelWidth - Padding * 2f - ColumnGap) * 0.5f;
             float rightColumnX = Padding * 2f + ColumnGap * 0.5f + columnWidth;
+
+            /* Both lists stop above the hint rather than at the padding line, so the line telling
+             * the player what to do is never the first thing covered. */
+            float listTop = TitleHeight + HeaderHeight;
+            float listHeight = PanelHeight - listTop - Padding - hintHeight;
+
+            _documentContent = CreateColumn("Documents", Padding, listTop, columnWidth, listHeight);
+            _printerContent = CreateColumn("Printers", rightColumnX, listTop, columnWidth, listHeight);
 
             /* Said once, at build, rather than from every text: the symptom of a missing font asset
              * is a window full of empty boxes, and one line naming the asset to assign is worth
@@ -633,6 +628,92 @@ namespace Overworked.UI
         }
 
         /// <summary>
+        /// Builds one scrolling list: a column, a viewport that clips it, and the content rows go in.
+        /// </summary>
+        /// <remarks>
+        /// Called twice, once per side of the window, and the two are identical apart from where
+        /// they sit. That is the point: the printer column is not a special case of the document
+        /// column, it is the same thing with different rows in it, and a level with more printers
+        /// than fit is handled by the same scrollbar that handles more documents than fit.
+        /// </remarks>
+        /// <returns>The transform rows should be parented to.</returns>
+        private RectTransform CreateColumn(string name, float x, float y, float width, float height)
+        {
+            GameObject columnObject = new(name, typeof(RectTransform));
+            columnObject.transform.SetParent(_panelRect, worldPositionStays: false);
+
+            RectTransform column = (RectTransform)columnObject.transform;
+            column.anchorMin = new Vector2(0f, 1f);
+            column.anchorMax = new Vector2(0f, 1f);
+            column.pivot = new Vector2(0f, 1f);
+            column.anchoredPosition = new Vector2(x, -y);
+            column.sizeDelta = new Vector2(width, height);
+
+            GameObject viewportObject = new("Viewport", typeof(RectTransform));
+            viewportObject.transform.SetParent(column, worldPositionStays: false);
+
+            RectTransform viewport = (RectTransform)viewportObject.transform;
+            viewport.anchorMin = Vector2.zero;
+            viewport.anchorMax = Vector2.one;
+            viewport.offsetMin = Vector2.zero;
+            viewport.offsetMax = Vector2.zero;
+
+            /* Clips what is scrolled past. Without it the rows are drawn over the window's edge and
+             * across into the other column, which reads as broken rather than as a list — and with
+             * two columns it is worse than it was with one, because each would be spilling into the
+             * other's rows. */
+            viewportObject.AddComponent<RectMask2D>();
+
+            GameObject contentObject = new("Content", typeof(RectTransform));
+            contentObject.transform.SetParent(viewport, worldPositionStays: false);
+
+            RectTransform content = (RectTransform)contentObject.transform;
+
+            /* Pinned to the viewport's top edge and full width, growing downwards as rows are
+             * added. Rows keep the anchor and pivot they have always had, so a row's y is measured
+             * from the top of its own list rather than from the top of the window. */
+            content.anchorMin = new Vector2(0f, 1f);
+            content.anchorMax = new Vector2(1f, 1f);
+            content.pivot = new Vector2(0.5f, 1f);
+            content.anchoredPosition = Vector2.zero;
+            content.sizeDelta = new Vector2(0f, 0f);
+
+            ScrollRect scroll = columnObject.AddComponent<ScrollRect>();
+            scroll.content = content;
+            scroll.viewport = viewport;
+            scroll.horizontal = false;
+            scroll.vertical = true;
+
+            /* Clamped rather than elastic: this is a reference list being read, not something to be
+             * flung about, and a list that bounces past its own end reads as a mistake. */
+            scroll.movementType = ScrollRect.MovementType.Clamped;
+            scroll.scrollSensitivity = 30f;
+
+            return content;
+        }
+
+        /// <summary>
+        /// Gathers the printers this client can see, and puts them in a stable order.
+        /// </summary>
+        /// <remarks>
+        /// Sorted so the numbers keep their meaning between openings. FindObjectsByType returns
+        /// them in an order that has nothing to do with anything on screen, and the row says
+        /// "打印到 #2", which has to mean the same machine twice running.
+        /// </remarks>
+        private void CollectPrinters()
+        {
+            Printer[] found = FindObjectsByType<Printer>(FindObjectsInactive.Exclude);
+
+            foreach (Printer printer in found)
+            {
+                if (printer != null && printer.IsSpawned)
+                    _printers.Add(printer);
+            }
+
+            _printers.Sort(ComparePrinters);
+        }
+
+        /// <summary>
         /// Throws away the list rows and builds them again.
         /// </summary>
         private void Rebuild()
@@ -655,19 +736,27 @@ namespace Overworked.UI
             if (_panelRect == null || _computer == null)
                 return;
 
+            /* Gathered before either column is drawn, so that both are built from one list. The
+             * printer column is the only one that draws them, but the list is the column's own
+             * state and leaving it to be filled halfway through drawing would make the order the
+             * two columns are built in matter. */
+            CollectPrinters();
+
             float columnWidth = (PanelWidth - Padding * 2f - ColumnGap) * 0.5f;
-            float rightColumnX = Padding * 2f + ColumnGap * 0.5f + columnWidth;
 
-            /* Rows are placed from the top of the list, not the top of the window — the window's
-             * title and headings are outside the scrolling area, so the list starts at zero. */
-            float documentHeight = BuildDocumentRows(Padding, columnWidth, 0f);
-            float printerHeight = BuildPrinterRows(rightColumnX, columnWidth, 0f);
+            /* Rows are placed from the top of their own list, not the top of the window — the
+             * window's title and headings are outside the scrolling areas, so both lists start at
+             * zero, and each row's x is measured from its own column's left edge. */
+            float documentHeight = BuildDocumentRows(0f, columnWidth, 0f);
+            float printerHeight = BuildPrinterRows(0f, columnWidth, 0f);
 
-            /* The two columns sit side by side and share one scroll area, so the taller of them is
-             * what the scroll bar has to account for. A pixel of slack at the bottom keeps the last
-             * row off the mask's edge. */
-            if (_content != null)
-                _content.sizeDelta = new Vector2(0f, Mathf.Max(documentHeight, printerHeight));
+            /* Each column is exactly as tall as its own contents, which is what gives each one its
+             * own scrollbar instead of one bar for the pair. */
+            if (_documentContent != null)
+                _documentContent.sizeDelta = new Vector2(0f, documentHeight);
+
+            if (_printerContent != null)
+                _printerContent.sizeDelta = new Vector2(0f, printerHeight);
         }
 
         /// <summary>
@@ -679,11 +768,10 @@ namespace Overworked.UI
         /// been — so a kind with nothing under it is a caption over nothing, and there would be one
         /// for every entry in the asset.
         ///
-        /// Rows that cannot be pressed — the other side's, one this side has not been handed, one
-        /// already on its way — are drawn in place and made unclickable rather than removed. A list
-        /// that shortened itself under the player's cursor would move whatever they were about to
-        /// press; and hiding a document they have not earned would hide the one thing the round
-        /// wants them to see, which is that it exists.
+        /// Everything listed has been handed to this team, so the only row that cannot be pressed
+        /// is one whose fetch is already on its way — and that one is drawn in place and made
+        /// unclickable rather than removed, because a list that shortened itself under the player's
+        /// cursor would move whatever they were about to press.
         ///
         /// Whether a row can be pressed is not the same as whether it is lit: a row that is waiting
         /// cannot be pressed but stays at full brightness, because it is working rather than
@@ -693,14 +781,16 @@ namespace Overworked.UI
         {
             DocumentStore store = DocumentStore.Instance;
 
-            if (store == null || store.Count == 0)
+            if (store != null)
+                CollectDocumentOrder(store);
+
+            if (_documentOrder.Count == 0)
             {
-                AddRow(x, firstRowY, width, "(这个回合还没有任何文件)", null);
+                AddRow(_documentContent, x, firstRowY, width, EmptyDocumentsHint, null);
                 return firstRowY + RowHeight + RowGap;
             }
 
             PruneFetchClocks();
-            CollectDocumentOrder(store);
 
             float y = firstRowY;
             int openKind = -1;
@@ -762,8 +852,34 @@ namespace Overworked.UI
         {
             _documentOrder.Clear();
 
+            /* **Only what this team has been handed.** The store is the round's list of names —
+             * every document anybody has been told about, both sides' copies of all of them — so a
+             * panel built from it shows the other team's paperwork next to your own. What a player
+             * *has* is the grant list: the documents a job handed them when they took it.
+             *
+             * Both tests are here, and the second is not redundant. A grant is a document id and
+             * ids are per team, so in ordinary play the grant already implies the team — but the
+             * console can move somebody to the other side, and their old grants come with them. The
+             * panel's promise is "my side's files, that I have been given", and it should keep that
+             * promise for the same reason it makes it.
+             *
+             * So the column is a file cabinet rather than a catalogue, which is also what makes it
+             * read the way the round was described: the list grows as jobs are taken, and a file
+             * that has not been handed over is not greyed out, it is not there.
+             *
+             * A locked document used to be drawn greyed, and that was answering a different
+             * question — it told a player what the round contained, when what they need to know is
+             * what they can print. */
             for (int id = 0; id < store.Count; id++)
+            {
+                if (!store.TryGet(id, out DocumentRecord record))
+                    continue;
+
+                if (record.Team != _team || !IsUnlocked(id))
+                    continue;
+
                 _documentOrder.Add(id);
+            }
 
             _documentOrder.Sort(CompareDocuments);
         }
@@ -814,12 +930,11 @@ namespace Overworked.UI
             in DocumentRecord record,
             string kindName)
         {
-            bool mine = record.Team == _team;
             bool fetching = _computer.IsFetching(documentId);
 
-            /* Two separate reasons a row cannot be pressed and both have to be here. The document
-             * belongs to the other side, or this side has not been handed it yet. */
-            bool selectable = mine && IsUnlocked(documentId) && !fetching;
+            /* Everything listed has been handed over — see CollectDocumentOrder — so the only thing
+             * left that can stop a row being pressed is a fetch already on its way. */
+            bool selectable = !fetching;
 
             /* Waiting beats locked when both are true at once, which can happen to a fetch already
              * in flight. The document is on its way, and the countdown is the only sign of it there
@@ -831,13 +946,13 @@ namespace Overworked.UI
             Color baseColour = selectable || fetching ? RowColour : RowLockedColour;
 
             Button row = AddRow(
+                _documentContent,
                 x,
                 y,
                 width,
                 label,
                 selectable ? () => Choose(documentId) : null,
-                baseColour,
-                TeamLabel(record.Team));
+                baseColour);
 
             _documentRows.Add(new DocumentRow
             {
@@ -865,7 +980,7 @@ namespace Overworked.UI
         private void AddKindRow(float x, float y, float width, string name, string sourceTag)
         {
             GameObject kindObject = new("Kind", typeof(RectTransform));
-            kindObject.transform.SetParent(_content, worldPositionStays: false);
+            kindObject.transform.SetParent(_documentContent, worldPositionStays: false);
 
             /* Registered for the next rebuild, unlike the labels AddLabel makes: a kind row is a row
              * of the list and goes with the rest of them. */
@@ -904,21 +1019,6 @@ namespace Overworked.UI
         /// </remarks>
         private static string KindName(int specIndex, bool known, in DocumentCatalogue.Spec spec) =>
             known && !string.IsNullOrEmpty(spec.DisplayName) ? spec.DisplayName : $"种类 {specIndex}";
-
-        /// <summary>
-        /// Which side a document belongs to, as the tag at the end of its row.
-        /// </summary>
-        /// <remarks>
-        /// Only the two teams the round has names for are given letters. Anything else is printed
-        /// as the number it is: a team nobody has defined is not team A, and guessing would put a
-        /// document on the wrong side of a rule the server is enforcing.
-        /// </remarks>
-        private static string TeamLabel(int team) => team switch
-        {
-            0 => "A",
-            1 => "B",
-            _ => team.ToString(),
-        };
 
         /// <summary>
         /// Where a kind comes from, as the tag at the end of its row.
@@ -1078,21 +1178,9 @@ namespace Overworked.UI
         /// </remarks>
         private float BuildPrinterRows(float x, float width, float firstRowY)
         {
-            Printer[] found = FindObjectsByType<Printer>(FindObjectsInactive.Exclude);
-
-            foreach (Printer printer in found)
-            {
-                if (printer != null && printer.IsSpawned)
-                    _printers.Add(printer);
-            }
-
-            /* Sorted so the numbers keep their meaning between openings. FindObjectsByType returns
-             * them in an order that has nothing to do with anything on screen. */
-            _printers.Sort(ComparePrinters);
-
             if (_printers.Count == 0)
             {
-                AddRow(x, firstRowY, width, "(场景里没有打印机)", null);
+                AddRow(_printerContent, x, firstRowY, width, "(场景里没有打印机)", null);
                 return firstRowY + RowHeight + RowGap;
             }
 
@@ -1101,6 +1189,7 @@ namespace Overworked.UI
                 Printer printer = _printers[i];
 
                 AddRow(
+                    _printerContent,
                     x,
                     firstRowY + i * (RowHeight + RowGap),
                     width,
@@ -1127,6 +1216,7 @@ namespace Overworked.UI
         /// for a row that has nothing to put there.
         /// </param>
         private Button AddRow(
+            Transform parent,
             float x,
             float y,
             float width,
@@ -1135,7 +1225,7 @@ namespace Overworked.UI
             Color? background = null,
             string tag = null)
         {
-            Button button = CreateButton(_content, "Row", x, y, width, RowHeight, label, RowFontSize, onClick, tag);
+            Button button = CreateButton(parent, "Row", x, y, width, RowHeight, label, RowFontSize, onClick, tag);
 
             /* Registered for the next rebuild. Built here rather than inside CreateButton so that
              * the window's permanent parts, which share that method, are not swept up with them. */
@@ -1395,22 +1485,28 @@ namespace Overworked.UI
 
             _interaction.RequestDocument(_computer.NetworkObject, printer.NetworkObject, _chosenDocument);
 
-            if (FetchSeconds(_chosenDocument) > 0f)
-            {
-                MarkWaiting(_chosenDocument);
-                return;
-            }
-
-            Hide();
+            /* **The window stays open, and the row goes busy.** It used to close on a document that
+             * needed no download, which made a two-document job a two-visit job: walk to the
+             * computer, open it, send, get thrown out, open it again. The fetch case already stayed
+             * open — the countdown is the only sign a download is running — and the two had no
+             * business differing.
+             *
+             * Both are marked busy for the same reason: the row the player just pressed is still
+             * under their finger, and a second press during the round trip orders the same document
+             * twice at full price both times. Dropping the selection afterwards means the next
+             * press has to be a deliberate pick, which is one click per document and the least this
+             * can cost. */
+            MarkWaiting(_chosenDocument);
+            Choose(_chosenDocument);
         }
 
         /// <summary>
         /// Marks a row busy without waiting to be told.
         /// </summary>
         /// <remarks>
-        /// A fetch that has to wait leaves the window open, which leaves the row the player just
-        /// pressed still under their finger — and a second press during the round trip orders the
-        /// same document twice, at full price both times.
+        /// Sending leaves the window open, which leaves the row the player just pressed still under
+        /// their finger — and a second press during the round trip orders the same document twice,
+        /// at full price both times.
         ///
         /// This is a guess, and every rebuild throws it away: rows are recomputed from what the
         /// server actually says, so a request the server refused comes back on its own a round
