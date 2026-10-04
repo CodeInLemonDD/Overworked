@@ -195,6 +195,20 @@ namespace Overworked.Npc
                             int id = store.ServerCreate(entry.SpecIndex, team);
                             store.TryGet(id, out DocumentRecord record);
 
+                            /* **The request is what grants the file.** Naming a document puts it in
+                             * the round's list; it does not let anybody print it, because the
+                             * computer refuses anything that has not been handed over. Without this
+                             * the customer asks for something that cannot be obtained — the panel
+                             * shows it, greyed, and clicking it does nothing.
+                             *
+                             * Both teams, because the request is shared: it names a kind and a
+                             * number, and each side resolves that name against its own copy. The
+                             * customer said "bring me contract 1" to whoever is listening, so
+                             * whoever is listening may go and get theirs. */
+                            DocumentUnlocks unlocks = DocumentUnlocks.Instance;
+                            if (unlocks != null)
+                                unlocks.ServerUnlock(id);
+
                             if (team == 0)
                             {
                                 number = record.Number;

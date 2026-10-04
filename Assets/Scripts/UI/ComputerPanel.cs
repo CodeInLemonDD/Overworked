@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using Overworked.Documents;
 using Overworked.Interaction;
 using Overworked.Player;
@@ -204,9 +204,20 @@ namespace Overworked.UI
         private GameObject _canvasObject;
 
         /// <summary>
-        /// The window itself, and the parent every row is placed under.
+        /// The window itself, and the parent of everything that is not part of the list.
         /// </summary>
         private RectTransform _panelRect;
+
+        /// <summary>
+        /// Where the list rows go: the scrolling part of the window, inside the viewport.
+        /// </summary>
+        /// <remarks>
+        /// A row's y is measured from the top of this rather than from the top of the window, and
+        /// its height on each rebuild is what tells the scroll bar how far there is to go. The
+        /// window's own furniture — title, headings, hint, close button — is deliberately not under
+        /// it; see <see cref="Build"/>.
+        /// </remarks>
+        private RectTransform _content;
 
         /// <summary>
         /// Rows built on the last rebuild, so they can be thrown away.
@@ -528,6 +539,58 @@ namespace Overworked.UI
              * the window rather than falling through to whatever is underneath. */
             background.raycastTarget = true;
 
+            /* The list scrolls; the window's own furniture does not.
+             *
+             * It needs to scroll because the list only grows. A document is never removed from the
+             * round — ids stay valid for as long as anything might be holding one — so a panel
+             * that draws them all runs off the bottom of the screen after a few jobs and stays
+             * there. The title, the two column headings, the hint and the close button are laid
+             * out against the panel instead, and the close button especially has to be: a window
+             * whose only way out can be scrolled out of reach is a window that traps whoever
+             * opened it.
+             *
+             * The viewport's bottom stops above the hint rather than at the padding line, so the
+             * line telling the player what to do is not the first thing to be covered. */
+            float hintHeight = HintFontSize * 1.6f;
+
+            GameObject viewportObject = new("Viewport", typeof(RectTransform));
+            viewportObject.transform.SetParent(_panelRect, worldPositionStays: false);
+
+            RectTransform viewportRect = (RectTransform)viewportObject.transform;
+            viewportRect.anchorMin = Vector2.zero;
+            viewportRect.anchorMax = Vector2.one;
+            viewportRect.offsetMin = new Vector2(0f, Padding + hintHeight);
+            viewportRect.offsetMax = new Vector2(0f, -(TitleHeight + HeaderHeight));
+
+            /* Clips what is scrolled past. Without it the rows keep being drawn over the window's
+             * edges and the whole thing reads as broken rather than as a list. */
+            viewportObject.AddComponent<RectMask2D>();
+
+            GameObject contentObject = new("Content", typeof(RectTransform));
+            contentObject.transform.SetParent(viewportRect, worldPositionStays: false);
+
+            _content = (RectTransform)contentObject.transform;
+
+            /* Pinned to the viewport's top edge and full width, growing downwards as rows are
+             * added. Rows are placed with the same anchor and pivot they always had, so a row's y
+             * is measured from the top of the list rather than from the top of the window. */
+            _content.anchorMin = new Vector2(0f, 1f);
+            _content.anchorMax = new Vector2(1f, 1f);
+            _content.pivot = new Vector2(0.5f, 1f);
+            _content.anchoredPosition = Vector2.zero;
+            _content.sizeDelta = new Vector2(0f, 0f);
+
+            ScrollRect scroll = panelObject.AddComponent<ScrollRect>();
+            scroll.content = _content;
+            scroll.viewport = viewportRect;
+            scroll.horizontal = false;
+            scroll.vertical = true;
+
+            /* Clamped rather than elastic: this is a reference list being read, not something to
+             * be flung about, and a list that bounces past its own end reads as a mistake. */
+            scroll.movementType = ScrollRect.MovementType.Clamped;
+            scroll.scrollSensitivity = 30f;
+
             float columnWidth = (PanelWidth - Padding * 2f - ColumnGap) * 0.5f;
             float rightColumnX = Padding * 2f + ColumnGap * 0.5f + columnWidth;
 
@@ -558,6 +621,7 @@ namespace Overworked.UI
 
             /* Built last so it draws over the body, and placed clear of the two columns. */
             CreateButton(
+                _panelRect,
                 "Close",
                 PanelWidth - Padding - 110f,
                 TitleHeight + 4f,
@@ -593,10 +657,17 @@ namespace Overworked.UI
 
             float columnWidth = (PanelWidth - Padding * 2f - ColumnGap) * 0.5f;
             float rightColumnX = Padding * 2f + ColumnGap * 0.5f + columnWidth;
-            float firstRowY = TitleHeight + HeaderHeight;
 
-            BuildDocumentRows(Padding, columnWidth, firstRowY);
-            BuildPrinterRows(rightColumnX, columnWidth, firstRowY);
+            /* Rows are placed from the top of the list, not the top of the window — the window's
+             * title and headings are outside the scrolling area, so the list starts at zero. */
+            float documentHeight = BuildDocumentRows(Padding, columnWidth, 0f);
+            float printerHeight = BuildPrinterRows(rightColumnX, columnWidth, 0f);
+
+            /* The two columns sit side by side and share one scroll area, so the taller of them is
+             * what the scroll bar has to account for. A pixel of slack at the bottom keeps the last
+             * row off the mask's edge. */
+            if (_content != null)
+                _content.sizeDelta = new Vector2(0f, Mathf.Max(documentHeight, printerHeight));
         }
 
         /// <summary>
@@ -618,14 +689,14 @@ namespace Overworked.UI
         /// cannot be pressed but stays at full brightness, because it is working rather than
         /// withheld. Only a row this player cannot have is drawn darker.
         /// </remarks>
-        private void BuildDocumentRows(float x, float width, float firstRowY)
+        private float BuildDocumentRows(float x, float width, float firstRowY)
         {
             DocumentStore store = DocumentStore.Instance;
 
             if (store == null || store.Count == 0)
             {
                 AddRow(x, firstRowY, width, "(这个回合还没有任何文件)", null);
-                return;
+                return firstRowY + RowHeight + RowGap;
             }
 
             PruneFetchClocks();
@@ -670,6 +741,8 @@ namespace Overworked.UI
                 AddDocumentRow(x + RowIndent, y, width - RowIndent, id, record, kindName);
                 y += RowHeight + RowGap;
             }
+
+            return y;
         }
 
         /// <summary>
@@ -792,7 +865,7 @@ namespace Overworked.UI
         private void AddKindRow(float x, float y, float width, string name, string sourceTag)
         {
             GameObject kindObject = new("Kind", typeof(RectTransform));
-            kindObject.transform.SetParent(_panelRect, worldPositionStays: false);
+            kindObject.transform.SetParent(_content, worldPositionStays: false);
 
             /* Registered for the next rebuild, unlike the labels AddLabel makes: a kind row is a row
              * of the list and goes with the rest of them. */
@@ -1003,7 +1076,7 @@ namespace Overworked.UI
         /// a frame out of date can only ever name a printer the server does not have — which is
         /// refused — and can never name the wrong one.
         /// </remarks>
-        private void BuildPrinterRows(float x, float width, float firstRowY)
+        private float BuildPrinterRows(float x, float width, float firstRowY)
         {
             Printer[] found = FindObjectsByType<Printer>(FindObjectsInactive.Exclude);
 
@@ -1020,7 +1093,7 @@ namespace Overworked.UI
             if (_printers.Count == 0)
             {
                 AddRow(x, firstRowY, width, "(场景里没有打印机)", null);
-                return;
+                return firstRowY + RowHeight + RowGap;
             }
 
             for (int i = 0; i < _printers.Count; i++)
@@ -1034,6 +1107,8 @@ namespace Overworked.UI
                     $"打印到 #{i + 1}   {printer.gameObject.name}",
                     () => SendTo(printer));
             }
+
+            return firstRowY + _printers.Count * (RowHeight + RowGap);
         }
 
         /// <summary>
@@ -1060,7 +1135,7 @@ namespace Overworked.UI
             Color? background = null,
             string tag = null)
         {
-            Button button = CreateButton("Row", x, y, width, RowHeight, label, RowFontSize, onClick, tag);
+            Button button = CreateButton(_content, "Row", x, y, width, RowHeight, label, RowFontSize, onClick, tag);
 
             /* Registered for the next rebuild. Built here rather than inside CreateButton so that
              * the window's permanent parts, which share that method, are not swept up with them. */
@@ -1084,6 +1159,7 @@ namespace Overworked.UI
         /// Creates one button, and remembers it so the next rebuild can clear it.
         /// </summary>
         private Button CreateButton(
+            Transform parent,
             string name,
             float x,
             float y,
@@ -1095,7 +1171,7 @@ namespace Overworked.UI
             string tag = null)
         {
             GameObject buttonObject = new(name, typeof(RectTransform));
-            buttonObject.transform.SetParent(_panelRect, worldPositionStays: false);
+            buttonObject.transform.SetParent(parent, worldPositionStays: false);
 
             RectTransform rect = (RectTransform)buttonObject.transform;
             rect.anchorMin = new Vector2(0f, 1f);

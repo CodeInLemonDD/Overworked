@@ -22,6 +22,15 @@ namespace Overworked.Documents
     /// and the panel shows three rows, two of them greyed — the player can see what the job wants
     /// before they have any of it, which is what makes the job a plan rather than a surprise.
     ///
+    /// **A request grants what it names.** The gap above is what makes a job a plan, and it is
+    /// also a trap the moment the thing doing the naming forgets the second half: a customer asks
+    /// for contract 1, the document appears on the panel, and nothing can be printed, because
+    /// naming put it in the store and nothing put it in anybody's hands. So whoever writes a
+    /// request — the customer spawner, and the console command that stands in for it — grants the
+    /// documents it creates, **for every team**, because a request names a kind and a number and
+    /// each side resolves that name against its own copy. An NPC that hands over a file without a
+    /// request is the case that still needs an explicit <see cref="ServerUnlock"/>.
+    ///
     /// **It holds document ids, not catalogue indices.** A kind is not something a player earns;
     /// an Excel is. Two teams earning "Excel" separately earn two different documents, and a list
     /// of kinds could not tell them apart.

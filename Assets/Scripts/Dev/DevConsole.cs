@@ -1000,6 +1000,15 @@ namespace Overworked.Dev
                             int id = store.ServerCreate(entry.SpecIndex, team);
                             store.TryGet(id, out DocumentRecord record);
 
+                            /* Granted, because a request is what grants what it names — the same
+                             * thing the customer spawner does, for the same reason. A command that
+                             * wrote a request and left its documents locked would be a request
+                             * nobody could fill, which is a confusing thing for a tool whose
+                             * whole job is to make the round walkable before a customer exists. */
+                            DocumentUnlocks unlocks = DocumentUnlocks.Instance;
+                            if (unlocks != null)
+                                unlocks.ServerUnlock(id);
+
                             if (team == 0)
                                 number = record.Number;
                             else if (record.Number != number)
