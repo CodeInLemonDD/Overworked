@@ -621,3 +621,116 @@ Computer (根)
 另外两处是**容易静默失败**的地方:种类名和它下面的行必须来自同一次解析(否则会互相矛盾),
 以及 `GetComponentInChildren` 拿到的是名字还是标签取决于创建顺序(反了会让倒计时盖掉队伍字母)。
 剩下的不确定性全是视觉的,而那要等这台面板第一次真的跑起来。
+
+---
+
+# 第四轮 · 文件夹归队
+
+**状态:完成,离线编译 0 error / 3 warning(全是 CS0114 基线,和开工前一致)。**
+
+**文件**:`Assets/Scripts/Interaction/FolderIntake.cs`(**唯一改动的**)、
+`Assets/Scripts/Interaction/NetworkGrabbable.cs`(**读了一遍,一个字节没改** —— 理由见第三节)。
+
+---
+
+## 一、改了什么
+
+`FolderIntake.TryFile` 加了一条判据,位置在「是不是文档」之后、「装进去」之前:
+
+```csharp
+DocumentStore store = DocumentStore.Instance;
+if (store == null || !store.TryGet(dataId, out DocumentRecord record))
+    return false;
+
+if (record.Team != _grabbable.VariantTeam)
+    return false;
+```
+
+别的都没动:盒子判定仍然走 `IntakeVolume.CollectInside`,销毁仍然显式传 `DespawnType.Destroy`,
+判据顺序仍然是「便宜的在前面、能动世界的放最后」。
+
+---
+
+## 二、`VariantTeam == -1`:我选了(a),写成了「只收同样没队伍的」
+
+**实现是纯相等,没给 -1 开分支。** 一个没队伍的文件夹只接受同样没队伍的文档 ——
+而游戏里没有任何地方会造出没队伍的文档(客户生成器给 0 和 1,控制台 `document` 默认 0),
+所以实际上就是**谁也不收**。
+
+不选(b)「谁都能收」的四条理由,按重要性排:
+
+1. **(b) 恰好就是这一轮要修的那个 bug。** 混合队伍的文件夹 = 客户要的 `合同 1` 和另一队的
+   `Excel 1` 待在一起,这单算谁的?而且 (b) 的失败是**静默的** —— 要等到交付对不上才发现,
+   文件夹上没有颜色也没有别的线索。
+2. **(b) 换不到它通常换得到的东西。** 项目里确实有「场景比这个功能老,就按加它之前的行为」
+   这条惯例(`DocumentUnlocks.Instance == null` 就什么都不锁,是同一族)。**但这里不适用**:
+   `PlayerInteraction.Team` 默认是 **0 而不是 -1**,所以**即使没人分过队,从箱子里出来的文件夹
+   也永远不是 -1**。(b) 那条分支只会在「没走正常路径造出来的文件夹」上触发(控制台的 `give`),
+   而代价由正常路径付。
+3. **拒绝是可以撤销的那个方向。** 文档留在世界上,玩家还能捡回来;装进去就永远没了。
+4. **顺带是个信号。** 看到 -1 的文件夹 = 有调用点忘了传队伍。如果它静默地什么都吃,
+   这个信号就没了。
+
+至于「拿不准就不收」:`TryGet` 失败 = 这个 peer 还不知道那份文档的队伍 ——
+刚加入的客户端会在几帧里看到 id 但还没有记录。按「不知道就当同队」处理,会得到一个
+**在某些帧上吞对面文档、某些帧上不吞**的文件夹,那是 bug 能有的最糟形状。
+
+---
+
+## 三、我核过、确认「不需要改」的 —— 任务 ①
+
+**结论:`NetworkGrabbable.cs` 一个字都不用改,「文件夹带队伍色」这条路是通的。**
+规格说这条「大概率不需要改代码,你要做的是确认它成立」,所以下面是依据,不是我猜的:
+
+| 环节 | 在哪 | 结论 |
+|---|---|---|
+| 参数存在 | `GrabbableSpawner.SpawnGrabbable(..., variantNumber, variantTeam, dataId)` | ✅ 已经在 |
+| 什么时候设 | 同一方法内,`manager.ServerManager.Spawn(nob, owner)` **之前** | ✅ `variantTeam >= 0` 就调 `ServerSetVariant` |
+| 存到哪 | `NetworkGrabbable._variantTeam`(`SyncVar<int>`,初值 -1) | ✅ 复制字段 |
+| 客户端读得到吗 | `public int VariantTeam => _variantTeam.Value` | ✅ 同一个 SyncVar,不存在只在一端可读 |
+| 上色 | `ApplyPayload` → `ApplyVariant(_payload)` → 每个 `PayloadLabel.SetVariant(number, team)`;`_variantNumber` 和 `_variantTeam` 的 `OnChange` 都挂在 `OnVariantChanged` 上 | ✅ 和文档编号走的是同一条路 |
+| 没有标签的 payload | `PayloadLabel` 是可选的,`_texts` 为空时 `SetVariant` 直接返回 | ✅ 不是错误 |
+
+**一个边界**:`SpawnGrabbable` 只在 `variantNumber >= 0 || variantTeam >= 0` 时才调
+`ServerSetVariant`。W3 传 `variantTeam: player.Team`(0 或 1)时条件成立 ✓。
+
+**这条链上唯一我验不了的一环是资源** —— 见第五节。
+
+---
+
+## 四、我认为还可能不对的地方
+
+1. **文件夹不收的时候没有任何反馈。** 拿错队伍的文档丢上去,它只是静静地不接,文档弹在地上,
+   玩家会以为是自己没瞄准。**这是这一轮最可能被误读成 bug 的行为**,而修它要视觉或音效,
+   不在我名下。规格里说这一轮用 `DebugHud` 顶着(它会把文件夹里的东西列出来)。
+2. **队伍判定我用的是 `VariantTeam` 属性而不是 `_variantTeam` 字段** —— 前者是公开的,
+   后者是私有的,语义一样。
+3. **`FolderIntake` 挂在 `Object.prefab` 上,所以纸和墨盒身上也有这个组件。** 它们在
+   `dataId < 0` 那一关就被挡掉了,走不到队伍判定 —— 顺序刻意如此。
+4. **文件夹丢进文件夹** 同样被 `dataId < 0` 挡住,和队伍无关。
+5. **我仍然没有在真机里跑过。** 上面那张表全是读代码读出来的。
+
+---
+
+## 五、需要你在编辑器里确认的(离线编译看不见)
+
+1. **文件夹的 payload 上要有 `PayloadLabel`,而且 `_teamColours` 要填。**
+   否则「文件夹带队伍色」这条路**代码上是通的、视觉上是空的** —— `SetVariant` 在
+   `_teamColours` 为空时会跳过上色,**不报错**。规格说「不用新做视觉」,
+   前提是那个 prefab 上已经有了。
+2. **`PayloadCatalogue` 里文件夹那个条目的 `IsContainer` 要勾上** —— `FolderIntake.Update`
+   的第一道闸就是它,不勾的话这个文件夹根本不收东西。
+3. **`_variantTeam` 和 `_dataId` 是编织器生成的 SyncVar。** 离线编译**不跑编织器**,
+   所以「字段过不过网」只能在 Unity 里看。表现是**两端文件夹颜色不一致**,或者
+   **文件夹吞了文档但客户不认**。
+4. **`Object.prefab` 上要有 `FolderIntake` 组件** —— 它是早几轮就有的,但我不确定场景那边接没接。
+
+---
+
+## 六、一句话总结
+
+改动本身是三行:文档的队伍必须等于文件夹的队伍,`TryGet` 失败和队伍未知都按「不收」处理。
+真正花时间的是**证明另外半个任务不需要改** —— 我把 spawn → SyncVar → PayloadLabel 这条链
+逐段核了一遍,结论是通的,所以 `NetworkGrabbable.cs` 我一个字没动。
+剩下的不确定性几乎全在**资源那一侧**:颜色要 `PayloadLabel._teamColours` 填了才看得见,
+而这件事代码永远报不出来。

@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using Overworked.Containers;
+using Overworked.Documents;
 using FishNet.Object;
 using UnityEngine;
 
@@ -30,6 +31,11 @@ namespace Overworked.Interaction
     /// <see cref="Documents.DocumentStore"/>. That id is the point: an object written down as an
     /// entity would keep its look and lose its number, and a folder of unnamed sheets is worth
     /// nothing to a customer who asked for Excel 3.
+    ///
+    /// **A folder belongs to one team.** It takes the documents made for the team it was made for
+    /// and refuses everything else — including when it cannot tell which is which. That rule is
+    /// the whole of why a folder carries a team at all; see <see cref="TryFile"/> for why the
+    /// refusing direction is the one to fail in, and for what an unteamed folder does.
     ///
     /// There is deliberately no way to take a document back out. A container that only fills has
     /// to be unlimited, or a player can jam it with a legal action and never recover — so this one
@@ -144,6 +150,29 @@ namespace Overworked.Interaction
         ///
         /// The self check is load-bearing even so: a folder lying on the floor is loose, and its
         /// own origin is inside its own box, so without it every folder would try to file itself.
+        ///
+        /// **The team has to match, and "unknown" is not a match.** A folder holding both teams'
+        /// documents is the mixed folder this rule exists to prevent: the customer asked for
+        /// 合同 1, and a folder carrying this team's 合同 1 and the other team's Excel 1 is
+        /// nobody's order, with nothing on screen to say why it will not be accepted. Both halves
+        /// of that comparison therefore have to refuse rather than permit when they cannot tell —
+        /// a document id the store cannot resolve is one this peer has not been told about yet,
+        /// which a client sees on the frames around joining, and a folder that swallowed the other
+        /// side's documents on some frames and not others would be the worst possible shape for a
+        /// bug to have.
+        ///
+        /// **A folder whose own team is unset accepts only documents that are equally unset, which
+        /// is to say nothing.** Written as plain equality rather than as a special case for -1,
+        /// because the rule "same team as me" already covers it and a branch would be one more
+        /// thing to keep true. The tempting alternative — treat an unteamed folder as unteamed
+        /// *and therefore unrestricted*, the way a scene that predates a feature is allowed to
+        /// behave as it did before — does not buy what that convention usually buys. Player teams
+        /// default to 0 rather than -1, so a folder out of the supply box is never unteamed even
+        /// when nobody has assigned teams at all; the permissive branch would only ever fire for
+        /// objects made outside the normal path, and its price would be paid by the real ones.
+        ///
+        /// Refusing is also the only direction that can be undone. The document stays in the world
+        /// and its owner picks it up again; anything filed is gone for good.
         /// </remarks>
         /// <returns>True when the document went in.</returns>
         private bool TryFile(NetworkGrabbable grabbable)
@@ -156,6 +185,13 @@ namespace Overworked.Interaction
              * contents disappear, since anything stored is despawned and only an entry survives. */
             int dataId = grabbable.DataId;
             if (dataId < 0)
+                return false;
+
+            DocumentStore store = DocumentStore.Instance;
+            if (store == null || !store.TryGet(dataId, out DocumentRecord record))
+                return false;
+
+            if (record.Team != _grabbable.VariantTeam)
                 return false;
 
             /* Full, or no container to speak of: the document stays in the world where its owner
