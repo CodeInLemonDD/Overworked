@@ -334,3 +334,102 @@ unlock 2         → 那一行变 ✓,打印「unlocked spec 2 '…'; 3 of 4 ope
 unlock reset     → 回到第一步的状态
 ```
 
+---
+---
+
+# 第四轮 · 客户(W1,关键路径)
+
+**状态**:三个文件写完,离线编译 **0 error / 3 warning**(全是 CS0114 基线,和开工前一致)。
+**运行时未验证** —— 没进过 Unity,更没跑过 MPPM。
+**文件**:`Npc/Customer.cs`(917 行)、`Npc/CustomerSpawner.cs`(326 行)、`Npc/RequestLabel.cs`(461 行)。
+别的文件一个字没碰。场景和 prefab 没碰。**已把三个新文件加进 `Assembly-CSharp.csproj`** 的 `<Compile Include>`,
+并用 `strings` 确认过它们真的进了程序集(不是 csproj 没生效的假绿)。
+
+## ⚠️ 先说一件会挡住验收的事:队伍现在分不开
+
+`PlayerInteraction.Team` 默认是 **0**,**全场只有控制台的 `team <n>` 能改它** —— 没有任何地方在玩家生成时
+按连接顺序分队(规格 §二③ 写了要做,但第五节窗口表里没有归给谁,看排期像是 10-05 的活)。
+
+后果是具体的:**两个实例默认都在队 0**,于是两个人看到同一个钟、抢同一个客户、分数记在同一个队上。
+「两队抢单」这一轮验不了,除非你手动在一个实例里敲 `team 1`。
+
+**我的代码完全按 `player.Team` 写**(见 `Customer.OnServerInteract` 和 `RequestLabel.AppendClock`),
+所以那个机制一落地就自动生效,不用改我这三个文件。要我今天就补上,告诉我在哪个文件里做。
+
+## 做了什么
+
+| 文件 | 是什么 |
+|---|---|
+| `Customer.cs` | 一个 `StationBase` + 一个进料工位。按 E 接单、文件夹丢进来交货、两个钟、判定与结算 |
+| `CustomerSpawner.cs` | 服务端维持「场上两个客户有活」,按 `RequestCatalogue` 的层号建文档 + 写需求 |
+| `RequestLabel.cs` | 客户头顶的世界空间面板:他要什么 + **你自己队**的钟 |
+
+## 我自己决定的(规格里没写死的地方)
+
+**① 等待钟的「重启」我按状态机实现,不是按计时器。** 每帧重算 `没有任何队 Working && 不是所有队都 Failed`,
+条件从假变真的那一刻把钟重置成满值。这样「A 接了、超时了、B 从没接过」自动得到 B 一个全新的 20 秒,
+不需要为它写一条专门的规则 —— 而正是不做这件事会让客户无限期占着位子。
+
+**② 已经接单的队再按 E 不会重置自己的耐心钟。** 这是刻意的:`ServerAccept` 只接受 `Idle` 的队。
+能重置的话,耐心钟就从「压力」变成了「一个可以一直按的键」。
+
+**③ 客户「走开」做成了每端自己推位置,不是服务端移动。** 场景物体没有 NetworkTransform,
+服务端单方面挪位置在客户端是看不见的。所以 `Customer` 用一个序列化字段 `_idleOffset`,**每一端都从
+复制的需求状态算出位置、各自 MoveTowards 过去** —— 这一点和 `PrinterDisplay` 由复制状态决定画什么是同一个道理。
+**默认是 `(0,0,0)`,也就是默认不动**;想要「空闲时站到一边」就填一个偏移量,选中客户有 gizmo 画出来。
+
+**④ `ServerAssign(int requestId)` 是我加的,不在冻结接口里。** 生成器必须能把需求交给某个客户,
+而 `_requestId` 是私有的。它是**我这两个文件之间的缝**,没有任何第三方跨过它,所以我没有去动冻结的形状。
+
+**⑤ `TeamCount` 从 `ScoreBoard` 读,不在客户上再序列化一份。** 两个必须一致的数字就是一个多余的数字。
+代价是 `ScoreBoard` 不在场景里时客户一队都开不了工 —— 生成器会为此报一次错(见下)。
+
+**⑥ 交付盒子的中心压低、开得大**(中心 y=0.5,半径 0.9×0.7×0.9)。理由是投喂的动作本身:
+文件夹是**丢过去**的,落点在他脚边。只围着胸口开盒子的话,只有「还在空中就被接住」才算数,
+玩家会觉得客户无缘无故不收东西。选中客户看 gizmo 调。
+
+**⑦ 「不是文档就丢掉」这类防御没有做**,因为客户的判据是「是不是文件夹」+「队伍对不对」,
+不属于它的一律**留在世界上**、什么都不发生 —— 没有会把机器卡死的中间态需要清理。
+
+**⑧ 生成器的报错做成「同一句只说一次」。** 它每秒跑一次,场景里少一个物体就会每秒刷一条同样的错,
+把别的东西全埋掉。每一条都是装配错误、不可能在运行时被修好,所以说了就不再说。
+
+## 需要你在 Unity 里确认的(离线编译看不到)
+
+1. **编织器**。离线编译**不跑 FishNet 的 weaver**。这轮我用了 `SyncList<byte>`、`SyncList<float>`、
+   `SyncVar<int>`、`SyncVar<float>`,加上 `[Server]` 标在 `ServerAccept` / `ServerDeliver` / `ServerAssign` 上
+   —— 这些只有 Unity 编一遍才知道过不过。**这是第一件要看的事。**
+2. **`RequestLabel` 的 `_font` 必须填 `Assets/Font/simhei SDF.asset`。** 不填的话客户要什么全是方框(没报错的话也只是一条 LogError)。
+3. **世界空间画布能不能看见**。它是 `RenderMode.WorldSpace` + `sortingOrder 1`、无 GraphicRaycaster,
+   和 `ContainerGauge` 同一套。要确认它没有被场景几何挡住、正反面对。
+4. **相机有没有 MainCamera 标签** —— 面板靠 `Camera.main` 转身。
+5. **客户身上要有碰撞体**,否则按不了 E(这条你规格里已经写了)。
+6. **`DocumentCatalogue` 的下标**:`RequestCatalogue` 里填的 `SpecIndex` 是它的下标。
+
+## 我拿不准的地方
+
+- **917 行里最可能错的是 `Meets`。** 它是全场唯一要「种类 + 编号 + 队伍」三者同时对上的地方。
+  我用一张「已经用掉的条目」表保证一份文档只满足一行(要两份就得真有两份),但**这一条我没有任何自动化验证**,
+  只能靠你实测「一个文件夹塞两份合同能不能交掉要两份合同的需求」。
+- **`_idleOffset` 我没测过。** 逻辑很短,但它是全项目唯一一处「每一端都写场景物体的 transform」,
+  如果别的地方也在动这个物体就会打架。默认关闭,所以你不动它就完全没影响。
+- **客户走开/走回来的动画没有。** 是瞬移式的匀速移动,没有转身、没有待机。规格说「先别雕人」,我按这个尺度做的。
+- **回合结束时客户不会停。** 0 秒之后客户照常在跑钟、照常判交付,只是 `ScoreBoard.ServerAward` 会拒收
+  (分数不再动)。「回合结束时场上的客户怎么办」是 10-05 的事,我没有替它决定。
+
+## 接线清单(你没写的那些)
+
+你规格末尾的表里只有 `Customer` 那一行,**`CustomerSpawner` 没有归属**,我按下面的放:
+
+| 物体 | 挂什么 | 填 |
+|---|---|---|
+| `Customer`(×4) | `NetworkObject`(场景物体、**不加 NetworkTransform**)+ `Customer` + 碰撞体 + 一个挂 `RequestLabel` 的空子节点 | `Customer` 上四个钟/分的数字保持默认(等待 20 / 耐心 60 / 交成 10 / 超时 5);`_intakeCentre`/`_intakeHalfExtents` 选中看 gizmo;`_idleOffset` 想让它走开再填 |
+| 那个空子节点 | `RequestLabel` | **`_font` → `Assets/Font/simhei SDF.asset`**;`_localOffset` 默认 `(0, 2.1, 0)` 是头顶高度,按模型调 |
+| **`CustomerSpawner`** | 建议挂在 `RequestBoard` 那个物体上(普通 MonoBehaviour,不需要 NetworkObject) | **`_requestCatalogue` → 你建的那个资产**;`_activeCount` 默认 2;`_seatInterval` 默认 1 秒 |
+
+**⚠️ 客户用玩家模型,但不要直接把 Player prefab 拖进去当客户。** Player prefab 上带着
+`PlayerInteraction` / `PlayerMovementPrediction` / `PlayerStamina` / `NetworkTransform` 那一整套,
+放进来会多出一个会读输入、会预测移动的「玩家」。要的是**它的模型**,底下重新挂
+`NetworkObject` + `Customer` + 碰撞体 + `RequestLabel` 子节点。
+
+
