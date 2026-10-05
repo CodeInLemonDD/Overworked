@@ -81,6 +81,11 @@ namespace Overworked.Interaction
         /// </summary>
         private readonly List<NetworkGrabbable> _scanBuffer = new();
 
+        /// <summary>
+        /// The last refusal that was reported, so the same one is not repeated every frame.
+        /// </summary>
+        private string _reported;
+
         private void Awake()
         {
             /* Looked up rather than serialized. Both are on this same object — the prefab is a
@@ -135,9 +140,38 @@ namespace Overworked.Interaction
             IntakeVolume.CollectInside(_grabbable.NetworkManager, transform, _centre, _halfExtents, _scanBuffer);
 
             for (int i = 0; i < _scanBuffer.Count; i++)
-                TryFile(_scanBuffer[i]);
+            {
+                if (TryFile(_scanBuffer[i], out string reason))
+                    continue;
+
+                /* **Refused, and it was a document.** Said out loud because the other two ways this
+                 * can go — a folder that is somewhere else, and a document that is somewhere else —
+                 * both look like nothing happening, and they are fixed in different places.
+                 *
+                 * Objects with no document id are still silent: a sheet of blank paper lying in a
+                 * folder is not a mistake and does not deserve a line every time one drifts past. */
+                if (reason != null)
+                    ReportOnce(reason);
+            }
 
             _scanBuffer.Clear();
+        }
+
+        /// <summary>
+        /// Says once per distinct complaint.
+        /// </summary>
+        /// <remarks>
+        /// Keyed on the message, so a folder refusing the same document for the same reason says so
+        /// once and a folder whose situation has changed says so again.
+        /// </remarks>
+        private void ReportOnce(string reason)
+        {
+            if (_reported == reason)
+                return;
+
+            _reported = reason;
+
+            Debug.LogError($"{nameof(FolderIntake)} on {gameObject.name} refused a document: {reason}.", this);
         }
 
         /// <summary>
@@ -175,14 +209,19 @@ namespace Overworked.Interaction
         /// and its owner picks it up again; anything filed is gone for good.
         /// </remarks>
         /// <returns>True when the document went in.</returns>
-        private bool TryFile(NetworkGrabbable grabbable)
+        private bool TryFile(NetworkGrabbable grabbable, out string reason)
         {
+            reason = null;
+
             if (grabbable == null || grabbable == _grabbable)
                 return false;
 
             /* A document, and nothing else. A folder is not a document, so a folder cannot be put
              * into a folder — which is what keeps this from being a way to make a container's
-             * contents disappear, since anything stored is despawned and only an entry survives. */
+             * contents disappear, since anything stored is despawned and only an entry survives.
+             *
+             * Silence rather than a reason: an object with no document id is not a document, and one
+             * drifting through a folder's box is not a mistake. */
             int dataId = grabbable.DataId;
             if (dataId < 0)
                 return false;
@@ -195,21 +234,33 @@ namespace Overworked.Interaction
              * Refusing is also the direction that can be undone: the sheet stays in the world and
              * its owner carries it to a stamp desk. Anything filed is gone for good. */
             if (!grabbable.IsStamped)
+            {
+                reason = "it has not been stamped, so it is still blank paperwork";
                 return false;
+            }
 
             DocumentStore store = DocumentStore.Instance;
             if (store == null || !store.TryGet(dataId, out DocumentRecord record))
+            {
+                reason = $"document {dataId} cannot be resolved by the store";
                 return false;
+            }
 
             if (record.Team != _grabbable.VariantTeam)
+            {
+                reason = $"it belongs to team {record.Team} and this folder belongs to team {_grabbable.VariantTeam}";
                 return false;
+            }
 
             /* Full, or no container to speak of: the document stays in the world where its owner
              * can still pick it back up. The same rule every intake in the project follows —
              * nothing fed to a machine is destroyed for want of a slot, or for a mistake in the
              * prefab. */
             if (!_container.ServerTryAdd(ContainerEntry.ForData(dataId)))
+            {
+                reason = "the folder has no room";
                 return false;
+            }
 
             /* Destroy rather than pool: these objects carry per-life state that a recycled
              * instance would bring back with it. Passed explicitly so this does not depend on the
