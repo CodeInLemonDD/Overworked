@@ -183,6 +183,7 @@
 | **打印头那张纸闪一下**(队列长时,打到尾声会短暂出现下一份的内容) | `Printing N → Finish N` 的**过渡混合是 0.25 秒**,而下一份任务在上一份完工的**下一帧**就开工 —— `_printingDocument` 立刻变成 N+1,于是混合还没走完,打印头上画的那份已经被换掉了。**修法:把这六条过渡的 `Transition Duration` 改成 0。** 注意**六条都要改** —— 只改了 `Printing 1~3` 的话,堆里到第 4 张时它会回来 |
 | 投掷物落在地上捡不起来 | 状态卡在 `Free`,而 `Free` 不在拾取白名单。**吸附与松手是两件事**:吸附看高度(即时),松手看速度(停稳后交还所有权) |
 | DebugHud 的容器列表里每张纸都占一行 | 文件夹的容器只能挂在 `Object.prefab` 上(所有可抓物体共用一个 prefab),于是**「一个容器」和「一个可抓物体」不再一一对应**,`FindObjectsByType<ContainerBase>` 会捞回整个世界。HUD 现在跳过**空的随身容器**,并按 payload 而不是按名字给它们命名 —— 它们全叫 `Object`。**下一个遍历 `ContainerBase` 的地方要自己回答同一个问题** |
+| 文件夹在身上没有任何队伍标记 | `PayloadLabel` 是照着**文档**写的:它往 `TMP_Text` 里写编号、给文字染色,**`_texts` 是空的就直接 return**。而文件夹是三块网格、一个字都没有 —— 于是「文件夹挂一个 `PayloadLabel` 就有颜色了」这条推论**在第一个没有文字的 payload 上就断了**,而且断得完全安静:组件挂上了、什么也没发生。现在多了一条 `_tinted` 路径(走 `MaterialPropertyBlock`,因为全场文件夹共用一个材质资产,改材质会把所有文件夹一起染) |
 | 文件夹装了什么看不见 | 容器在根节点上,而 `ApplyPayload` 会**清掉根节点的所有子物体**,所以 `ContainerGauge` 挂上去会在 spawn 时被抹掉。现在靠 DebugHud 的非空随身容器行验收;要在世界里显示,得先把 `Object.prefab` 的 `_payloadRoot` 指到一个子节点上 —— 那是一处结构改动,见 `structural-change-rollback` 那条约定 |
 
 ---

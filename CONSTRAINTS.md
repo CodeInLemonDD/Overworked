@@ -186,7 +186,14 @@ public void ServerSetPayload(int index);
 public void ServerSetVariant(int number, int team);   // 同样在 Spawn 之前调
 ```
 
-**插槽(prefab 侧)**:在 payload prefab 上挂 `PayloadLabel`,把要写编号的 `TMP_Text` 指给它,`_teamColours` 按队伍索引填颜色。
+**插槽(prefab 侧)**:在 payload prefab 上挂 `PayloadLabel`。**两条路,按 payload 有什么选:**
+
+| 字段 | 用在 | 填什么 |
+|---|---|---|
+| `_texts` | **有文字的** payload(文档) | 要写编号的 `TMP_Text`,可能有多个 |
+| `_tinted` | **没有文字的** payload(**文件夹**) | 要染色的 `Renderer`,通常是文件夹的封面和书脊 |
+| `_teamColours` | 两条路共用 | 按队伍索引填颜色,index 0 是队 0 |
+| `_colourProperty` | 只有 `_tinted` 用 | 默认 `_BaseColor`(URP Lit) |
 
 ```csharp
 public class PayloadLabel : MonoBehaviour
@@ -199,6 +206,18 @@ public class PayloadLabel : MonoBehaviour
 
 - **没有 `PayloadLabel` 的 payload 会被跳过,这不是错误** —— 空白纸、墨盒就没有编号
 - **编号变化【不会】重建 payload** —— 只更新文字。重建会顺带重测几何,而重测会把 transform 挪到原点,那在物体已经被拿着或正在飞的时候是看得见的
+
+> **`_tinted` 是为了文件夹才有的,而且必须走 `MaterialPropertyBlock`。**
+> 文件夹没有文字(它是三块网格),所以队伍只能画在身上。而**全场每个文件夹共用同一个材质资产** ——
+> 直接写材质的颜色会把**所有**文件夹(包括别人手上那些)一起染成最后盖章那一队的颜色。
+> 属性块是 per-renderer 的,不会碰材质。
+>
+> **`_teamColours` 故意只有一份**,两条路共用:一个队的颜色只写一个地方,
+> 两份就会有一份是没人看的那个,而写错的正是它。
+>
+> **属性名写错是静默的** —— 渲染器保持原色,什么都不报。这一条**故意不加运行时检查**:
+> 症状是「文件夹颜色不对」,就摆在配置它的人眼前,和这个项目里那些看不见的静默失败不是一类。
+> 换了着色器(比如换成内置 Standard)要把 `_colourProperty` 改成 `_Color`。
 
 ### `GrabbableSpawner` 的静态工具
 
