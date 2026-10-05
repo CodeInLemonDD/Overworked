@@ -1792,6 +1792,7 @@ GameObject:
   - component: {fileID: 1077913959}
   - component: {fileID: 1077913963}
   - component: {fileID: 1077913962}
+  - component: {fileID: 1077913964}
   m_Layer: 0
   m_Name: ScoreBoard
   m_TagString: Untagged
@@ -1906,6 +1907,22 @@ MonoBehaviour:
   _teamCount: 2
   _roundSeconds: 300
   _writeInterval: 0.2
+--- !u!114 &1077913964
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1077913957}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 49dcceabd6a075545b8de129b420226c, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Overworked.Match.MatchFlow
+  _componentIndexCache: 255
+  _addedNetworkObject: {fileID: 1077913959}
+  _networkObjectCache: {fileID: 0}
+  _pollSeconds: 0.1
 --- !u!1 &1144960322
 GameObject:
   m_ObjectHideFlags: 0
@@ -2127,6 +2144,7 @@ MonoBehaviour:
   _sortingOrder: 2
   _teamFontSize: 30
   _countdownFontSize: 130
+  _resultFontSize: 72
   _margin: 24
 --- !u!1001 &1383056553
 PrefabInstance:
