@@ -103,23 +103,6 @@ namespace Overworked.Npc
         private readonly List<DocumentRequest> _rows = new();
 
         /// <summary>
-        /// Whether he has already put his offer up this round.
-        /// </summary>
-        /// <remarks>
-        /// Server only, and it is the whole of "one trade per colleague per round". It has to be
-        /// remembered rather than derived from the board: the request comes down as soon as every
-        /// team is out by either route, and a colleague who took that as his cue would write a
-        /// fresh offer on the very next frame — an unlimited supply of the same document.
-        ///
-        /// **Set when the offer goes up, not when it is collected**, so that a trade everybody
-        /// failed is over too. A second chance would be a different feature, and the version of it
-        /// that falls out of the board alone is the bad one: the ask would silently become
-        /// "图片 2" between attempts, because naming the same documents again hands out the next
-        /// number rather than the same one.
-        /// </remarks>
-        private bool _offered;
-
-        /// <summary>
         /// Which wiring complaint has already been made.
         /// </summary>
         private string _reported;
@@ -188,7 +171,7 @@ namespace Overworked.Npc
         /// </remarks>
         private void EnsureOffer()
         {
-            if (!IsServerInitialized || _offered || RequestId >= 0)
+            if (!IsServerInitialized || RequestId >= 0)
                 return;
 
             DocumentStore store = DocumentStore.Instance;
@@ -231,10 +214,6 @@ namespace Overworked.Npc
             }
 
             ServerAssign(requestId);
-
-            /* Marked here rather than when somebody collects: the offer exists from this moment,
-             * and it is the offer that is once-per-round. See _offered. */
-            _offered = true;
         }
 
         /// <summary>
@@ -271,13 +250,26 @@ namespace Overworked.Npc
                 if (spec.Source != (int)DocumentSource.Trade)
                     continue;
 
-                /* Asked of team 0 and read as an answer for every team. Numbers are per (kind,
-                 * team), but both teams' copies are created in lockstep — see RequestWriter — so a
-                 * number that is right for one is right for all of them. */
-                if (!store.TryFind(row.SpecIndex, row.Number, 0, out int id))
-                    continue;
+                /* Asked of **every** team, not of team 0. The copies are separate documents, so one
+                 * side already having theirs says nothing about the other — and a side that still
+                 * needs it is exactly who the next offer is for. Asking only team 0 got this wrong
+                 * in the case that matters most: one side trades and the other runs out of time,
+                 * and the side that ran out is the one left with no way to try again. */
+                bool wanted = false;
 
-                if (unlocks.IsUnlocked(id))
+                for (int team = 0; team < TeamCount; team++)
+                {
+                    if (!store.TryFind(row.SpecIndex, row.Number, team, out int id))
+                        continue;
+
+                    if (!unlocks.IsUnlocked(id))
+                    {
+                        wanted = true;
+                        break;
+                    }
+                }
+
+                if (!wanted)
                     continue;
 
                 _givesSpec.Value = row.SpecIndex;
@@ -350,16 +342,6 @@ namespace Overworked.Npc
             }
 
             return true;
-        }
-
-        /// <summary>
-        /// Server: the round is being cleared, so he has a fresh trade to offer next time.
-        /// </summary>
-        protected override void OnServerReset()
-        {
-            _offered = false;
-
-            base.OnServerReset();
         }
 
         /// <summary>
