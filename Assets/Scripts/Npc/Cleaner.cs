@@ -130,9 +130,58 @@ namespace Overworked.Npc
         private float _cleanTimer;
 
         /// <summary>
+        /// Server: stops her collider touching anything loose in the world.
+        /// </summary>
+        /// <remarks>
+        /// **Her collider is not selective.** It is what stops players walking through her, and it
+        /// cannot be told that the same rule should not apply to a contract lying on a table she is
+        /// passing. A collider overlapping a dynamic body pushes it out, and a table is not an
+        /// obstacle to her — so she walks through the table, overlaps what is on it, and sweeps it
+        /// on to the floor. Every loose object is therefore told to ignore her.
+        ///
+        /// **This is what she was originally built to be, restored by hand.** She had no collider at
+        /// all, on the grounds that she must not shove the objects she is about to collect — and
+        /// then she was given one, so that players could not walk through her. That fix took away
+        /// the property nobody had written down, and this puts it back in the only place it can be:
+        /// collision is a property of a pair, so the pairing has to be stated somewhere, and this is
+        /// the one method that already holds the whole list.
+        ///
+        /// A layer would do it more cheaply and is the right answer if this ever shows up in a
+        /// profile — she and the players on their own two layers, `Default` unticked between her and
+        /// it. It is not worth the project-wide setting while one sweep every half second is
+        /// already walking every object in the world.
+        ///
+        /// Ignored rather than merely not-pushed because `Physics.IgnoreCollision` lasts as long as
+        /// both colliders do, so an object is dealt with once and then never enters the solver
+        /// against her again. An object spawned since the last sweep gets a half second of ordinary
+        /// collision, which is the cost of not searching the world every frame.
+        /// </remarks>
+        private void PreventShoving()
+        {
+            if (_collider == null)
+                _collider = GetComponent<Collider>();
+
+            if (_collider == null)
+                return;
+
+            for (int i = 0; i < _scanBuffer.Count; i++)
+            {
+                NetworkGrabbable grabbable = _scanBuffer[i];
+
+                if (grabbable != null)
+                    grabbable.IgnoreCollisionWith(_collider);
+            }
+        }
+
+        /// <summary>
         /// Reused by the sweep. See <see cref="GrabbableSpawner.CollectSpawnedGrabbables"/>.
         /// </summary>
         private readonly List<NetworkGrabbable> _scanBuffer = new();
+
+        /// <summary>
+        /// Her own collider, found once. See <see cref="PreventShoving"/>.
+        /// </summary>
+        private Collider _collider;
 
         private void Start()
         {
@@ -231,6 +280,8 @@ namespace Overworked.Npc
              * key synchronously. The buffer is our own list, so removing from the world while
              * walking it is safe. */
             GrabbableSpawner.CollectSpawnedGrabbables(manager, _scanBuffer);
+
+            PreventShoving();
 
             for (int i = 0; i < _scanBuffer.Count; i++)
             {

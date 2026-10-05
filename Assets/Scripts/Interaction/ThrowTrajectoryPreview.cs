@@ -264,6 +264,14 @@ namespace Overworked.Interaction
         {
             _material = CreateMaterial();
 
+            /* **No material means no dots.** A renderer left with a null material is drawn with
+             * Unity's missing-material shader, which is bright magenta — a colour that says "this
+             * is broken" to everybody except the player, who is the one person it cannot be
+             * explained to. The arc simply not being there reads as the game not having an arc,
+             * which is the honest description of a build where its shader was stripped. */
+            if (_material == null)
+                return;
+
             for (int i = 0; i < _dotCount; i++)
             {
                 GameObject dot = GameObject.CreatePrimitive(PrimitiveType.Sphere);
@@ -298,13 +306,31 @@ namespace Overworked.Interaction
         /// </summary>
         private Material CreateMaterial()
         {
+            /* **A shader that nothing references is not in the build.** Shader.Find searches the
+             * whole project in the editor and only what was included at build time everywhere else,
+             * so URP's Unlit -- which no material in this project uses -- resolves in Play mode and
+             * comes back null in a build. That is the worst shape for the failure to have: the one
+             * place it cannot be seen until it is too late to check.
+             *
+             * URP's Lit is the fallback precisely because something does reference it: every
+             * material in the project is on it, so it is in the build whether or not anybody
+             * arranged for it. The dots are shaded rather than flat, which is a fair price for
+             * being drawn at all. */
             Shader shader = Shader.Find("Universal Render Pipeline/Unlit");
+
             if (shader == null)
-                shader = Shader.Find("Unlit/Color");
+                shader = Shader.Find("Universal Render Pipeline/Lit");
 
             if (shader == null)
             {
-                Debug.LogWarning($"{nameof(ThrowTrajectoryPreview)} could not find an unlit shader; the arc may render opaque.", this);
+                /* Said as an error and with the fix in it, because the alternative that ships is
+                 * a row of magenta spheres — see Build, which refuses to draw them. */
+                Debug.LogError(
+                    $"{nameof(ThrowTrajectoryPreview)} found no shader for its dots, so the throw arc will not be drawn " +
+                    "in this build. Add 'Universal Render Pipeline/Unlit' to Project Settings → Graphics → " +
+                    "Always Included Shaders to get it back.",
+                    this);
+
                 return null;
             }
 
