@@ -50,9 +50,20 @@ namespace Overworked.Npc
     /// **Both teams trade with him, each on their own.** His ask is one request, because it is a
     /// name and both teams have their own copies of what it names; his reward is per-team, resolved
     /// through <see cref="DocumentStore.TryFind"/> at the moment it is handed over, exactly the way
-    /// <see cref="Customer"/>'s grant is. And his request stays up until *both* sides have had
-    /// their turn — <see cref="FinishTeam"/> is what says so — so this is not a race the way a
-    /// customer is. The first team to finish does not take the offer away from the second.
+    /// <see cref="Customer"/>'s grant is.
+    ///
+    /// **The offer comes down as soon as one team has traded, and that is not a race.** A customer
+    /// keeps his request up until both sides are out, because the losing side would otherwise be
+    /// left holding documents for a job that no longer exists — but this offer is derived rather
+    /// than kept, so taking it down costs nothing at all: the other team walks over and asks, and
+    /// the same query writes the same trade back.
+    ///
+    /// Which is why there is no <see cref="Customer.FinishTeam"/> override here, and why adding one
+    /// back is a mistake worth recognising. A colleague who waits for every team to have had its
+    /// turn **can never finish on his own in a session where a team has no players**: he holds the
+    /// offer open for somebody who is not coming, the player who did trade is shown a trade they
+    /// have already done, and — because a team that has traded is out for that offer — he can never
+    /// be asked for a new one.
     ///
     /// **He has no clock, and his offer lives exactly as long as the need it answers.** It is not
     /// posted in advance and it is not on a timer: it appears when somebody stands in front of him
@@ -444,31 +455,6 @@ namespace Overworked.Npc
         /// </remarks>
         protected override void Penalise(int team)
         {
-        }
-
-        /// <summary>
-        /// Server: his request stands until every team has had its turn.
-        /// </summary>
-        /// <remarks>
-        /// The caller has already written "this team is out" into the phase list, so the question
-        /// is only whether anybody is left. Delivering and running out both land in that state,
-        /// which is what lets one comparison answer for both — a team that has traded with him and
-        /// a team that has given up are the same thing to him.
-        ///
-        /// The request really does have to stay on the board in the meantime. An NPC's ask is what
-        /// a team is granted against and what its folder is judged against, so taking it down when
-        /// the first side finished would leave the second side able to take a job that could no
-        /// longer be completed or paid for.
-        /// </remarks>
-        protected override bool FinishTeam(int team)
-        {
-            for (int other = 0; other < TeamCount; other++)
-            {
-                if (PhaseOf(other) != CustomerPhase.Failed)
-                    return false;
-            }
-
-            return true;
         }
 
         /// <summary>
