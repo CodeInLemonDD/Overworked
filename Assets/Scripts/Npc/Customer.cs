@@ -614,6 +614,17 @@ namespace Overworked.Npc
             {
                 DocumentRequest row = _wantedBuffer[i];
 
+                /* **Not everything the request names.** A kind somebody else is holding is not in
+                 * the office's systems to be handed over, so taking the job does not produce it —
+                 * that team has to go and trade for it. This is the single exception to "taking the
+                 * job is what hands the paperwork over", and it is the whole reason a colleague is
+                 * worth walking to. See DocumentSource.Trade. */
+                if (store.TryGetSpecAt(row.SpecIndex, out DocumentCatalogue.Spec spec)
+                    && spec.Source == (int)DocumentSource.Trade)
+                {
+                    continue;
+                }
+
                 if (store.TryFind(row.SpecIndex, row.Number, team, out int id))
                     unlocks.ServerUnlock(id);
             }

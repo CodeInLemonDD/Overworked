@@ -22,6 +22,14 @@ namespace Overworked.Npc
     /// something you already had. He is what closes the loop the customers open — they ask for
     /// things nobody in the office has, and the answer is a trade.
     ///
+    /// **What he is holding is found rather than authored.** The documents only a trade can produce
+    /// are the ones whose kind has <see cref="DocumentSource.Trade"/> for its source: taking a
+    /// customer's job grants everything the request names *except* those, so they sit in the store
+    /// locked and unwanted until somebody brings them in. He walks the live requests looking for one
+    /// of those and offers it up. That is why "the colleague has Excel 1" is not a field on this
+    /// component — it is not a fact about him, it is a fact about what the office is short of this
+    /// minute, and it changes as the round does.
+    ///
     /// **His offer is authored, not drawn from the tier table.** A customer's escalating asks are a
     /// difficulty curve, and the tier table is where a curve belongs. A trade is content: "give me
     /// an image and an article and I will let you have my spreadsheet" is a specific piece of level
@@ -70,19 +78,6 @@ namespace Overworked.Npc
         private RequestCatalogue.RequestEntry[] _wants;
 
         /// <summary>
-        /// What he hands over when he gets it.
-        /// </summary>
-        /// <remarks>
-        /// **One entry, and the first is the only one ever used.** The trade is "this paperwork for
-        /// that document"; a colleague holding a bundle would be a different feature with a
-        /// different interface, and the label over his head has one line to say it in. More than one
-        /// is reported rather than silently ignored.
-        /// </remarks>
-        [Tooltip("What he hands over. The first document named is the only one used.")]
-        [SerializeField]
-        private RequestCatalogue.RequestEntry[] _gives;
-
-        /// <summary>
         /// Kind of the document he hands over. Replicated.
         /// </summary>
         /// <remarks>
@@ -106,11 +101,6 @@ namespace Overworked.Npc
         /// warning is about.
         /// </remarks>
         private readonly List<DocumentRequest> _rows = new();
-
-        /// <summary>
-        /// Reused while writing the offer.
-        /// </summary>
-        private readonly List<DocumentRequest> _offerRows = new();
 
         /// <summary>
         /// Whether he has already put his offer up this round.
@@ -204,8 +194,9 @@ namespace Overworked.Npc
             DocumentStore store = DocumentStore.Instance;
             RequestBoard board = RequestBoard.Instance;
             ScoreBoard scores = ScoreBoard.Instance;
+            DocumentUnlocks unlocks = DocumentUnlocks.Instance;
 
-            if (store == null || board == null || scores == null)
+            if (store == null || board == null || scores == null || unlocks == null)
                 return;
 
             if (_wants == null || _wants.Length == 0)
@@ -225,7 +216,10 @@ namespace Overworked.Npc
                 return;
             }
 
-            if (!NameOffer(store, teamCount))
+            /* Nothing to hold means nothing to offer, which is the ordinary state of a round before
+             * anybody has been asked for something nobody in the office can produce. Quiet, not a
+             * complaint: this is a wait, and it is retried every frame. */
+            if (!FindHeldDocument(store, board, unlocks))
                 return;
 
             int requestId = board.ServerCreate(_rows);
@@ -244,43 +238,54 @@ namespace Overworked.Npc
         }
 
         /// <summary>
-        /// Server: names the document he hands over, for every team.
+        /// Server: works out which document he is holding.
         /// </summary>
         /// <remarks>
-        /// The documents are created here even though nobody can see them — an unlock is an id, and
-        /// an id has to belong to something. Which team's copy comes out is decided later, when
-        /// somebody actually collects; this is what makes both copies exist to collect.
+        /// **He does not make it. He has it.** The document already exists — whoever wants it named
+        /// it, and naming a document is what makes one — and it is sitting locked, waiting for
+        /// somebody to bring it into the office. This finds which one that is by walking the live
+        /// requests for a kind whose source is <see cref="DocumentSource.Trade"/>, which is exactly
+        /// the set that <see cref="Customer"/>'s grant skips and therefore exactly the set that
+        /// cannot be obtained any other way.
+        ///
+        /// **Nothing about which document he holds is authored, and that is the point.** "The
+        /// colleague has Excel 1" is not a fact about the colleague; it is a fact about what the
+        /// office is currently short of. An authored number would be a guess about a request that
+        /// has not been written yet, and the guess failing would be silent in the worst way — a
+        /// trade finished, and nothing handed over at the end of it.
+        ///
+        /// A request whose kind is not trade-sourced is skipped, and so is one a team already has:
+        /// the first trade is what makes the second unnecessary. Finding nothing is the ordinary
+        /// state early in a round, and is answered with silence rather than a complaint.
         /// </remarks>
-        private bool NameOffer(DocumentStore store, int teamCount)
+        private bool FindHeldDocument(DocumentStore store, RequestBoard board, DocumentUnlocks unlocks)
         {
-            if (_gives == null || _gives.Length == 0)
+            for (int i = 0; i < board.Count; i++)
             {
-                ReportOnce("nothing is authored as the thing he hands over, so agreeing to the trade would be work for nothing");
-                return false;
+                if (!board.TryGet(i, out DocumentRequest row))
+                    continue;
+
+                if (!store.TryGetSpecAt(row.SpecIndex, out DocumentCatalogue.Spec spec))
+                    continue;
+
+                if (spec.Source != (int)DocumentSource.Trade)
+                    continue;
+
+                /* Asked of team 0 and read as an answer for every team. Numbers are per (kind,
+                 * team), but both teams' copies are created in lockstep — see RequestWriter — so a
+                 * number that is right for one is right for all of them. */
+                if (!store.TryFind(row.SpecIndex, row.Number, 0, out int id))
+                    continue;
+
+                if (unlocks.IsUnlocked(id))
+                    continue;
+
+                _givesSpec.Value = row.SpecIndex;
+                _givesNumber.Value = row.Number;
+                return true;
             }
 
-            _offerRows.Clear();
-            RequestWriter.Name(_gives, store, teamCount, _offerRows, this);
-
-            if (_offerRows.Count == 0)
-            {
-                ReportOnce("the authored offer names no documents, so there would be nothing to hand over");
-                return false;
-            }
-
-            if (_offerRows.Count > 1)
-            {
-                ReportOnce(
-                    $"{_offerRows.Count} documents are authored as the offer, and only the first is ever handed over; " +
-                    "the rest will never be seen");
-            }
-
-            DocumentRequest offer = _offerRows[0];
-
-            _givesSpec.Value = offer.SpecIndex;
-            _givesNumber.Value = offer.Number;
-
-            return true;
+            return false;
         }
 
         /// <summary>

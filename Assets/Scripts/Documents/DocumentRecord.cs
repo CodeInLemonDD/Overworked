@@ -20,6 +20,22 @@ namespace Overworked.Documents
         /// Fetched over the Internet. Costs <c>FetchSeconds</c> before it can be printed.
         /// </summary>
         Internet = 1,
+
+        /// <summary>
+        /// Somebody else has it, and will not simply hand it over.
+        /// </summary>
+        /// <remarks>
+        /// **The one source a team cannot obtain by asking.** Taking a customer's job grants that
+        /// team everything the request names — that is the whole of what taking the job means —
+        /// with this excepted, because what is in here is not in the office's systems to be handed
+        /// out. It has to be traded for; see <see cref="Npc.Colleague"/>.
+        ///
+        /// The consequence worth understanding before authoring one: **every request naming a kind
+        /// with this source needs a trade first**, including a request the round opens with. Set a
+        /// kind to Trade in a tier customers reach early and a colleague stops being an interesting
+        /// detour and becomes a gate on every job in the office.
+        /// </remarks>
+        Trade = 2,
     }
 
     /// <summary>

@@ -1024,12 +1024,26 @@ namespace Overworked.UI
         /// Where a kind comes from, as the tag at the end of its row.
         /// </summary>
         /// <remarks>
-        /// Anything that is not Internet is filed, rather than only the value that means filing. A
-        /// source the catalogue does not define is a data-entry mistake, and the harmless reading
-        /// of it is the one to take.
+        /// Anything the catalogue does not define reads as filed, rather than the three being
+        /// written out as an exhaustive set. A source with no entry is a data-entry mistake, and the
+        /// harmless reading of it is the one to take.
         /// </remarks>
-        private static string SourceLabel(int source) =>
-            (DocumentSource)source == DocumentSource.Internet ? "Internet" : "后台";
+        private static string SourceLabel(int source)
+        {
+            switch ((DocumentSource)source)
+            {
+                case DocumentSource.Internet:
+                    return "Internet";
+
+                /* Named after who has it rather than after the mechanic. The player standing at the
+                 * computer is being told where this is, not how to get it — and "同事" is both. */
+                case DocumentSource.Trade:
+                    return "同事";
+
+                default:
+                    return "后台";
+            }
+        }
 
         /// <summary>
         /// Whether this player's side has been handed a document.
