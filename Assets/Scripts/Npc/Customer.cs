@@ -346,6 +346,21 @@ namespace Overworked.Npc
         public virtual bool UsesWaitingClock => true;
 
         /// <summary>
+        /// Whether a team that has taken the job is on a clock of its own.
+        /// </summary>
+        /// <remarks>
+        /// True for a customer, and half of what makes him pressure rather than a chore: the work
+        /// has to be done inside the round's own rhythm, and a team that takes a job and drifts off
+        /// is charged for the place it is holding.
+        ///
+        /// False for anything whose offer lasts exactly as long as the thing it is for — see
+        /// <see cref="Colleague"/>, which appears because somebody wants what he is holding and goes
+        /// away when nobody does. A deadline on top of that would be a second thing ending the same
+        /// offer, and the one that fired first would be an accident rather than a decision.
+        /// </remarks>
+        public virtual bool UsesPatienceClock => true;
+
+        /// <summary>
         /// Whether this NPC writes its own request rather than being handed one.
         /// </summary>
         /// <remarks>
@@ -850,6 +865,13 @@ namespace Overworked.Npc
                     anyWorking = true;
                     allFailed = false;
 
+                    /* An NPC with no patience clock has a team that is working and simply stays
+                     * that way, which is what "the offer lasts as long as the need does" looks like
+                     * from inside the clock loop — see UsesPatienceClock. Nothing is charged and
+                     * nothing expires; what ends the job is the need going away. */
+                    if (!UsesPatienceClock)
+                        continue;
+
                     _exactRemaining[team] = Mathf.Max(_exactRemaining[team] - deltaTime, 0f);
 
                     if (_exactRemaining[team] <= 0f)
@@ -963,7 +985,7 @@ namespace Overworked.Npc
         /// to have done it, so a customer can never be left standing in front of a request that is
         /// still being asked for by a label somewhere.
         /// </remarks>
-        private void GoIdle()
+        protected void GoIdle()
         {
             RequestBoard board = RequestBoard.Instance;
             if (board != null && _requestId.Value >= 0)

@@ -331,31 +331,43 @@ namespace Overworked.Npc
             if (_local == null)
                 return;
 
-            int team = _local.Team;
-            _builder.Append('\n');
+            string clock = ClockText(_local.Team);
 
+            /* Nothing at all rather than an empty line, for the same reason the whole panel is
+             * hidden when there is no request: a blank row is a row somebody reads. */
+            if (!string.IsNullOrEmpty(clock))
+                _builder.Append('\n').Append(clock);
+        }
+
+        /// <summary>
+        /// What the clock line says for a team, or null when there is no clock to speak of.
+        /// </summary>
+        /// <remarks>
+        /// Two questions, and they are the NPC's to answer rather than this label's: whether it
+        /// gives up on its own (see <see cref="Customer.UsesWaitingClock"/>), and whether a team
+        /// that has taken the job is on a clock of its own (see
+        /// <see cref="Customer.UsesPatienceClock"/>). An NPC that answers no to the second has no
+        /// countdown to draw, and drawing a frozen one would be the label announcing a deadline
+        /// that is not running — which is worse than saying nothing, because the player waits for
+        /// it.
+        /// </remarks>
+        private string ClockText(int team)
+        {
             switch (_customer.PhaseOf(team))
             {
                 case CustomerPhase.Failed:
-                    _builder.Append("出局");
-                    return;
+                    return "出局";
 
                 case CustomerPhase.Working:
-                    _builder.Append(Mathf.CeilToInt(_customer.RemainingFor(team))).Append('s');
-                    return;
+                    return _customer.UsesPatienceClock
+                        ? Mathf.CeilToInt(_customer.RemainingFor(team)) + "s"
+                        : null;
 
                 default:
-                    /* Not every NPC gives up on his own. One that does not has no waiting clock to
-                     * draw, and "等待 0s" would be the label announcing a countdown that is not
-                     * running — a number frozen at zero reads as the game having stopped. */
                     if (!_customer.UsesWaitingClock)
-                    {
-                        _builder.Append("未接单");
-                        return;
-                    }
+                        return "未接单";
 
-                    _builder.Append("等待 ").Append(Mathf.CeilToInt(_customer.WaitingRemaining)).Append('s');
-                    return;
+                    return "等待 " + Mathf.CeilToInt(_customer.WaitingRemaining) + "s";
             }
         }
 

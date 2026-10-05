@@ -1,5 +1,7 @@
 using System.Collections.Generic;
+using FishNet.Connection;
 using FishNet.Object.Synchronizing;
+using Overworked.Interaction;
 using Overworked.Documents;
 using Overworked.Stations;
 using UnityEngine;
@@ -51,6 +53,18 @@ namespace Overworked.Npc
     /// <see cref="Customer"/>'s grant is. And his request stays up until *both* sides have had
     /// their turn — <see cref="FinishTeam"/> is what says so — so this is not a race the way a
     /// customer is. The first team to finish does not take the offer away from the second.
+    ///
+    /// **He has no clock, and his offer lives exactly as long as the need it answers.** It is not
+    /// posted in advance and it is not on a timer: it appears when somebody stands in front of him
+    /// and asks, it is about whatever the office is short of at that moment — the Excel 3 the job
+    /// somebody just took needs, not the Excel 1 that happens to come first — and it goes away the
+    /// moment nothing wants it any more. See <see cref="DropStaleOffer"/>; the shape of it is that
+    /// the question which puts the offer up and the question which takes it down are the same
+    /// question, so the offer and the reason for it cannot drift apart.
+    ///
+    /// That is also why a job taken and then abandoned costs nothing. The reason to stop caring
+    /// about a document is that the job wanting it went away, and charging for that would land on a
+    /// player who did nothing wrong.
     ///
     /// **Running out of time costs nothing but the trade.** A customer's penalty exists because a
     /// customer is a place in a queue that a team wasted, and there are other customers waiting.
@@ -113,6 +127,17 @@ namespace Overworked.Npc
         public override bool UsesWaitingClock => false;
 
         /// <summary>
+        /// Nobody is on a clock, because the offer's life is the need's life.
+        /// </summary>
+        /// <remarks>
+        /// A job taken and then abandoned would otherwise be a job charged for — and the charge
+        /// would land on a player who did nothing wrong, since the reason to stop caring about this
+        /// document is that the job wanting it went away. See <see cref="DropStaleOffer"/>, which is
+        /// what ends the offer instead.
+        /// </remarks>
+        public override bool UsesPatienceClock => false;
+
+        /// <summary>
         /// He writes his own trade rather than taking a customer's request.
         /// </summary>
         /// <remarks>
@@ -156,18 +181,82 @@ namespace Overworked.Npc
         {
             base.Update();
 
-            EnsureOffer();
+            DropStaleOffer();
         }
 
         /// <summary>
-        /// Server: puts his ask on the board, once the scene has finished starting up.
+        /// Server: he says what he wants when he is asked, and not before.
         /// </summary>
         /// <remarks>
-        /// **Retried every frame rather than written in <c>OnStartServer</c>**, for the reason
-        /// <see cref="CustomerSpawner"/> runs on a timer: two scene objects have no guaranteed order
-        /// between them, so a store that has not spawned yet is an ordinary thing to meet and not a
-        /// mistake to report. The wait costs three static reads a frame until it succeeds, and then
-        /// the guard at the top of this method makes every later frame cost one comparison.
+        /// **The offer is not posted in advance.** What he is holding is whatever the office is
+        /// short of at that moment — an Excel 3 for a job somebody has actually taken, not an
+        /// Excel 1 because it happens to be early in the round — and the only way to know what that
+        /// is, is for somebody to want something. So the offer is derived on the press, from the
+        /// live requests, and stands until the reason for it goes away.
+        ///
+        /// A press with nothing behind it does nothing at all, and says nothing. That is the same
+        /// answer every other refusal in the office gives, and here it is also the truthful one:
+        /// there is no trade because there is nothing to trade about.
+        /// </remarks>
+        protected override void OnServerInteract(PlayerInteraction player, NetworkConnection conn, float heldSeconds)
+        {
+            if (RequestId < 0)
+                EnsureOffer();
+
+            base.OnServerInteract(player, conn, heldSeconds);
+        }
+
+        /// <summary>
+        /// Server: takes the offer down when nobody wants what it was for any more.
+        /// </summary>
+        /// <remarks>
+        /// **The offer lasts exactly as long as the need does, and nothing else ends it.** A job
+        /// that asked for Excel 3 is delivered, or fails, or is abandoned for another one — and in
+        /// every case the request that named it leaves the board, so there is nothing for a
+        /// colleague holding an Excel 3 to be for. Standing there offering it would be a trade with
+        /// no subject, and worse, it would be the thing the next player found when they came looking
+        /// for the document their *new* job wants.
+        ///
+        /// This is why there is no clock on him. A deadline would be a second thing trying to end
+        /// the same offer, and whichever fired first would be an accident rather than a decision.
+        ///
+        /// The question asked is the same one that put the offer up — "is there a trade-only
+        /// document on a live request that somebody still has not been given" — so the offer and the
+        /// reason for it cannot drift apart.
+        /// </remarks>
+        private void DropStaleOffer()
+        {
+            if (!IsServerInitialized || RequestId < 0)
+                return;
+
+            DocumentStore store = DocumentStore.Instance;
+            RequestBoard board = RequestBoard.Instance;
+            DocumentUnlocks unlocks = DocumentUnlocks.Instance;
+
+            if (store == null || board == null || unlocks == null)
+                return;
+
+            /* Asked for the answer only; the two fields it writes as a side effect are set to what
+             * they already hold, because a live offer is by definition about something that is still
+             * wanted. */
+            if (FindHeldDocument(store, board, unlocks))
+                return;
+
+            GoIdle();
+        }
+
+        /// <summary>
+        /// Server: writes the trade he is offering, if there is one to offer.
+        /// </summary>
+        /// <remarks>
+        /// **Reached from a press, not from a clock.** Nothing here runs until somebody stands in
+        /// front of him and asks, which is the difference between a colleague who reflects what the
+        /// office is short of and one who decided what he wanted before anybody needed anything —
+        /// see <see cref="OnServerInteract"/>.
+        ///
+        /// The scene-ordered guards stay even so: this is the first thing that touches the store and
+        /// the board on this object's behalf, and a press can arrive in the same frame the scene
+        /// finishes loading.
         /// </remarks>
         private void EnsureOffer()
         {
