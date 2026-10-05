@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using FishNet.Connection;
+using FishNet.Managing;
 using Overworked.Documents;
 using Overworked.Interaction;
 using UnityEngine;
@@ -113,8 +114,25 @@ namespace Overworked.Stations
         private readonly List<NetworkGrabbable> _scanBuffer = new();
 
         /// <summary>
+        /// Reused by the complaint's description of what is nearby. Separate from the scan's buffer
+        /// because the two are filled at the same moment and answer different questions.
+        /// </summary>
+        private readonly List<NetworkGrabbable> _nearbyBuffer = new();
+
+        /// <summary>
+        /// Reused while describing what is nearby.
+        /// </summary>
+        private readonly System.Text.StringBuilder _description = new();
+
+        /// <summary>
         /// Which complaint has already been made, so it is said once rather than once per press.
         /// </summary>
+        /// <remarks>
+        /// The message carries a description of where the nearby objects are, so a press that
+        /// changes nothing is deduplicated and a desk whose situation has changed says so again.
+        /// The seconds the key was held are deliberately **not** in it: they change on every press,
+        /// and a message that is different every time is a message that is printed every time.
+        /// </remarks>
         private string _reported;
 
         /// <summary>
@@ -151,16 +169,70 @@ namespace Overworked.Stations
             if (_scanBuffer.Count == 0)
             {
                 ReportOnce(
-                    $"a press was held for {heldSeconds:0.0}s and reached the desk, but nothing is inside its box " +
-                    $"(centre {_intakeCentre}, half extents {_intakeHalfExtents}, in this object's own space)");
-
-                return;
+                    "a press reached the desk, but nothing is inside its box " +
+                    $"(centre {_intakeCentre}, half extents {_intakeHalfExtents}, in this object's own space). " +
+                    $"Loose objects near it, in the same space: {DescribeNearby()}");
             }
 
             for (int i = 0; i < _scanBuffer.Count; i++)
                 TryStamp(_scanBuffer[i]);
 
             _scanBuffer.Clear();
+        }
+
+        /// <summary>
+        /// Every loose object within a few metres, with where it is relative to this desk.
+        /// </summary>
+        /// <remarks>
+        /// The companion to the complaint above, and the reason it is worth spending a scan on a
+        /// message that is only ever read by somebody already looking for a fault: "nothing is in
+        /// the box" says the desk and the contract disagree about where the other one is, and it
+        /// does not say which of them moved. A short list of local coordinates answers that in one
+        /// reading — an object at <c>(0.0, 0.1, 0.0)</c> is on the floor at the desk's feet and the
+        /// desk is fine, while one at <c>(0.0, 2.4, 0.0)</c> means the desk is somewhere other than
+        /// where it looks.
+        ///
+        /// Deliberately not the same buffer the stamping scan uses, and deliberately not filtered by
+        /// the box: the point is to see what the box is missing.
+        /// </remarks>
+        private string DescribeNearby()
+        {
+            NetworkManager manager = NetworkManager;
+
+            if (manager == null)
+                return "(no network manager)";
+
+            GrabbableSpawner.CollectSpawnedGrabbables(manager, _nearbyBuffer);
+
+            if (_nearbyBuffer.Count == 0)
+                return "(no loose objects in the world at all)";
+
+            _description.Clear();
+
+            for (int i = 0; i < _nearbyBuffer.Count; i++)
+            {
+                NetworkGrabbable grabbable = _nearbyBuffer[i];
+
+                if (grabbable == null || !grabbable.IsSpawned)
+                    continue;
+
+                Vector3 local = transform.InverseTransformPoint(grabbable.transform.position);
+                if (local.magnitude > 4f)
+                    continue;
+
+                if (_description.Length > 0)
+                    _description.Append("; ");
+
+                _description.Append('(')
+                            .Append(local.x.ToString("0.00")).Append(", ")
+                            .Append(local.y.ToString("0.00")).Append(", ")
+                            .Append(local.z.ToString("0.00")).Append(") ")
+                            .Append(grabbable.State.ToString());
+            }
+
+            _nearbyBuffer.Clear();
+
+            return _description.Length > 0 ? _description.ToString() : "(none within 4m)";
         }
 
         /// <summary>
