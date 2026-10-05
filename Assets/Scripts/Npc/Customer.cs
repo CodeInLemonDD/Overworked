@@ -82,18 +82,22 @@ namespace Overworked.Npc
         private float _waitingSeconds = 20f;
 
         /// <summary>
-        /// What a team gets to deliver a two-document job, in seconds. Everything else is added.
+        /// What a team gets before any document is counted, in seconds. Everything else is added.
         /// </summary>
         /// <remarks>
         /// **A base, not a total.** The clock a team is actually given is this plus the price of
-        /// every document the request names — see <see cref="PatienceSeconds"/>. Setting it to the
-        /// whole duration would mean the tiers and the clock were two separate accounts of the same
-        /// job, and the tier table is the one that knows what a request contains.
+        /// every document the request names, first ones included — see <see cref="PatienceSeconds"/>.
+        /// Setting it to the whole duration would mean the tiers and the clock were two separate
+        /// accounts of the same job, and the tier table is the one that knows what a request holds.
+        ///
+        /// Thirty, which makes the opening tier — a contract and a spreadsheet — come out at a
+        /// minute once their two bonuses are added. The number is not meant to be read on its own;
+        /// it is the part of the clock that is the same for every job.
         /// </remarks>
-        [Tooltip("Seconds a two-document job gets. Each document the request names adds its own kind's bonus on top.")]
+        [Tooltip("Seconds on the clock before any documents are counted. Each document the request names adds its kind's bonus on top of this.")]
         [Min(1f)]
         [SerializeField]
-        private float _patienceSeconds = 60f;
+        private float _patienceSeconds = 30f;
 
         /// <summary>
         /// How often the server publishes the clocks, in seconds.
