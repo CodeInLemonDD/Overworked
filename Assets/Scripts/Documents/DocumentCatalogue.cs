@@ -92,6 +92,28 @@ namespace Overworked.Documents
             [Tooltip("Seconds before this can be printed. 0 for the company's own files.")]
             [Min(0f)]
             public float FetchSeconds;
+
+            /// <summary>
+            /// Extra seconds each of these adds to a request's clock, per document.
+            /// </summary>
+            /// <remarks>
+            /// **A paper's worth is not one thing: it is how much walking it costs.** A contract
+            /// costs a trip to the stamp desk, a spreadsheet costs a trade with whoever is holding
+            /// it, an image or an article costs the wait on the computer — so a request for three
+            /// spreadsheets is not the same job as a request for three contracts, and one clock for
+            /// every request makes the big ones impossible rather than hard.
+            ///
+            /// This is what stops that clock being a guess made in advance by whoever wrote the
+            /// tier table. The tiers already say what a request contains; this says what each thing
+            /// in it costs, and the two together are the clock. Authoring a new kind therefore means
+            /// answering this at the same time, and forgetting to leaves it free — which is the
+            /// right default for a thing that turns up on a shelf.
+            ///
+            /// Read by <see cref="Npc.Customer"/>, added up over the request's rows.
+            /// </remarks>
+            [Tooltip("Extra seconds on the job clock for each of these a request asks for.")]
+            [Min(0f)]
+            public float TimeBonusSeconds;
         }
 
         /// <summary>

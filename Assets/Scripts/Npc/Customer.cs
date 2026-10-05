@@ -82,9 +82,15 @@ namespace Overworked.Npc
         private float _waitingSeconds = 20f;
 
         /// <summary>
-        /// How long a team has to deliver once it has taken the job, in seconds.
+        /// What a team gets to deliver a two-document job, in seconds. Everything else is added.
         /// </summary>
-        [Tooltip("How long a team has to deliver once it has taken the job. Seconds.")]
+        /// <remarks>
+        /// **A base, not a total.** The clock a team is actually given is this plus the price of
+        /// every document the request names — see <see cref="PatienceSeconds"/>. Setting it to the
+        /// whole duration would mean the tiers and the clock were two separate accounts of the same
+        /// job, and the tier table is the one that knows what a request contains.
+        /// </remarks>
+        [Tooltip("Seconds a two-document job gets. Each document the request names adds its own kind's bonus on top.")]
         [Min(1f)]
         [SerializeField]
         private float _patienceSeconds = 60f;
@@ -575,13 +581,20 @@ namespace Overworked.Npc
             if ((CustomerPhase)_phases[team] != CustomerPhase.Idle)
                 return false;
 
+            /* **The clock is the request's, not the customer's.** A team is given the base plus what
+             * each thing in the request costs to get hold of — see
+             * DocumentCatalogue.Spec.TimeBonusSeconds — so a job for three spreadsheets is not on
+             * the same clock as a job for two contracts. One number for every request is what makes
+             * the big ones impossible rather than hard. */
+            float patience = PatienceSeconds();
+
             _phases[team] = (byte)CustomerPhase.Working;
-            _exactRemaining[team] = _patienceSeconds;
+            _exactRemaining[team] = patience;
 
             /* Published at once rather than at the next write slot: this is the frame the label
              * changes from the waiting clock to this team's own, and a fifth of a second of the
              * wrong clock reads as the press having done nothing. */
-            _remaining[team] = _patienceSeconds;
+            _remaining[team] = patience;
 
             /* **Taking the job is what hands the paperwork over.** The customer said what it wanted
              * when it appeared, and saying it is not giving it: the documents are named in the
@@ -643,6 +656,42 @@ namespace Overworked.Npc
                 if (store.TryFind(row.SpecIndex, row.Number, team, out int id))
                     unlocks.ServerUnlock(id);
             }
+        }
+
+        /// <summary>
+        /// Server: how long a team taking this job is given, from what the job asks for.
+        /// </summary>
+        /// <remarks>
+        /// **The base plus a price for each document.** The base is what a two-document request
+        /// gets, and each kind adds its own cost on top — see
+        /// <see cref="DocumentCatalogue.Spec.TimeBonusSeconds"/>, which is where the per-kind
+        /// numbers live because a contract and a spreadsheet are not the same amount of walking.
+        ///
+        /// Read from the board rather than stored, so the clock follows the request: the rows are
+        /// what the team is being asked for, and a request with no rows, or a store that cannot
+        /// resolve them, falls back to the base rather than to nothing. A job that cannot be
+        /// described is still a job somebody took.
+        ///
+        /// Uses the scratch buffer <see cref="Grant"/> and <see cref="Meets"/> share. Safe because
+        /// this runs once, from a press, before either of them.
+        /// </remarks>
+        private float PatienceSeconds()
+        {
+            RequestBoard board = RequestBoard.Instance;
+            DocumentStore store = DocumentStore.Instance;
+
+            float total = _patienceSeconds;
+
+            if (board == null || store == null || !board.TryGetWanted(_requestId.Value, _wantedBuffer))
+                return total;
+
+            for (int i = 0; i < _wantedBuffer.Count; i++)
+            {
+                if (store.TryGetSpecAt(_wantedBuffer[i].SpecIndex, out DocumentCatalogue.Spec spec))
+                    total += spec.TimeBonusSeconds;
+            }
+
+            return total;
         }
 
         /// <summary>
