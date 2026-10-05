@@ -265,6 +265,28 @@ namespace Overworked.Stations
         }
 
         /// <summary>
+        /// Server: puts the shelf back to empty, with the restock clock at zero.
+        /// </summary>
+        /// <remarks>
+        /// **Empty rather than full**, which is worth being explicit about because full is the
+        /// tempting answer. An empty box with its timer at zero is exactly what this machine is when
+        /// the scene loads — it stocks itself over the first seconds of a session — so emptying it
+        /// reproduces the opening instead of inventing a fuller one. Filling it instead would hand
+        /// the second round a pile of paper the first round had to wait for.
+        ///
+        /// Zeroing the timer is the other half. Leaving it mid-countdown would make the first sheet
+        /// of the new round arrive at whatever moment the old round happened to stop at, which is a
+        /// wait that varies for no reason anybody could see.
+        /// </remarks>
+        protected override void OnServerReset()
+        {
+            if (_container != null)
+                _container.ServerClear();
+
+            _refillTimer = 0f;
+        }
+
+        /// <summary>
         /// Server: hands one item to the player who asked, if their hands are free.
         /// </summary>
         /// <remarks>

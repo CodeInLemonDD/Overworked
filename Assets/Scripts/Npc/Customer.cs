@@ -403,6 +403,24 @@ namespace Overworked.Npc
         /// </summary>
         private void ServerUpdate()
         {
+            /* **The round is over, so this one stops where it stands.** Both clocks and the
+             * delivery scan are the round's business, and a customer left running past the final
+             * whistle would do two wrong things at once: it would walk itself out and hand the
+             * request back — changing the room after the round that was played in it had ended —
+             * and it would take a folder off somebody and destroy it without paying for it.
+             *
+             * The board's clock rather than the phase, because this is the server and the board has
+             * the exact answer; the phase is what the readout draws from and is up to a poll behind.
+             * See MatchFlow.
+             *
+             * Keeping the request rather than clearing it is deliberate. The office is the stage the
+             * settlement is going to be played on, and a stage swept clean the instant the clock
+             * stopped would have nothing left to settle. What is left standing here is taken away by
+             * ServerReset, when the next round is asked for. */
+            ScoreBoard scores = ScoreBoard.Instance;
+            if (scores != null && scores.IsOver)
+                return;
+
             EnsureTeamSlots();
 
             if (_requestId.Value < 0)
@@ -480,6 +498,15 @@ namespace Overworked.Npc
         {
             if (_requestId.Value < 0)
                 return false;
+
+            /* Past the final whistle there is nothing left to take. Without this a team that never
+             * accepted could still start a patience clock — a clock that is no longer advancing, so
+             * nothing would come of it, but the customer's own phase would change after the round it
+             * belonged to had ended. See ServerUpdate. */
+            ScoreBoard board = ScoreBoard.Instance;
+            if (board != null && board.IsOver)
+                return false;
+
             if (team < 0 || team >= _phases.Count)
                 return false;
 
@@ -655,6 +682,22 @@ namespace Overworked.Npc
 
             ServerAccept(player.Team);
         }
+
+        /// <summary>
+        /// Server: the round is being cleared, so this customer drops what it was holding.
+        /// </summary>
+        /// <remarks>
+        /// <see cref="GoIdle"/> and nothing else, because that is already the whole of "this
+        /// customer is free" — it takes its own request off the board, which matters here more than
+        /// anywhere: by the time this runs the board has been cleared of every row, and a customer
+        /// that kept its id would be holding a request that no longer exists and could never take
+        /// another one.
+        ///
+        /// It does not move. Customers are reused rather than spawned, so there is nowhere for one
+        /// to go, and the spawner seats whichever idle customer the scene lists first — the same
+        /// argument the spawner's own remarks make for picking by scene order.
+        /// </remarks>
+        protected override void OnServerReset() => GoIdle();
 
         /// <summary>
         /// Server: runs the waiting clock and every team's patience clock.

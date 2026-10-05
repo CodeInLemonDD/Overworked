@@ -738,6 +738,50 @@ namespace Overworked.Stations
         }
 
         /// <summary>
+        /// Server: takes the last round's work out of the machine.
+        /// </summary>
+        /// <remarks>
+        /// **Every container, including the two that hold supplies.** A machine that kept its paper
+        /// and its half-spent cartridge into the next round would give it a head start the first
+        /// round never had, and the first round is the one the difficulty was tuned against. Empty
+        /// is also the state this machine is already in when the scene loads, so a reset reproduces
+        /// the opening rather than inventing a second kind of beginning.
+        ///
+        /// The job in progress is dropped rather than finished. It belongs to the round being
+        /// cleared and its document has just been forgotten by the store, so a sheet that arrived in
+        /// the pile afterwards would be a delivery nobody could ever make good on.
+        ///
+        /// **<see cref="_printingDocument"/> is deliberately left alone.** It is never written on
+        /// its own and never read on its own — <see cref="_printingSlot"/> being zero is what says
+        /// nothing is printing — so clearing it would be a write of a value nothing consults, and
+        /// the pair is only trustworthy because it is written together. The same rule
+        /// <see cref="FinishCraft"/> follows.
+        /// </remarks>
+        protected override void OnServerReset()
+        {
+            /* Checked one at a time rather than assumed. A prefab with a slot left unassigned says
+             * so once at start-up and then carries on working around it, so a null here is a machine
+             * that is already known to be misconfigured — and a reset that threw would take the
+             * clearing of everything after it down with it. */
+            if (_paper != null)
+                _paper.ServerClear();
+
+            if (_ink != null)
+                _ink.ServerClear();
+
+            if (_output != null)
+                _output.ServerClear();
+
+            if (_queue != null)
+                _queue.ServerClear();
+
+            _crafting = false;
+            _craftSeconds = 0f;
+            _printingSlot.Value = 0;
+            _printsRemaining.Value = 0;
+        }
+
+        /// <summary>
         /// Server: hands the player the top sheet from the output.
         /// </summary>
         /// <remarks>

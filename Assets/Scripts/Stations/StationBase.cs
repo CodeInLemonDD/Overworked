@@ -72,5 +72,42 @@ namespace Overworked.Stations
         /// Server: does the work. Only ever reached through <see cref="ServerInteract"/>.
         /// </summary>
         protected abstract void OnServerInteract(PlayerInteraction player, NetworkConnection conn, bool longPress);
+
+        /// <summary>
+        /// Server: puts this station back to how it starts a round.
+        /// </summary>
+        /// <remarks>
+        /// Called once per station when a round is cleared, by whatever clears it — today
+        /// <see cref="Match.MatchFlow"/>. **Not the same thing as the round being over**: the round
+        /// ends while the office is still standing, and this is what takes the last round's work
+        /// back out of it. See <see cref="Match.MatchFlow"/> for why those two are separate.
+        ///
+        /// The guard sits here rather than on the extension point, for the reason
+        /// <see cref="ServerInteract"/> gives — the weaver inserts it by rewriting a method's body,
+        /// and an override is only reachable through this.
+        /// </remarks>
+        [Server]
+        public void ServerReset() => OnServerReset();
+
+        /// <summary>
+        /// Server: empties this station of the last round. Only ever reached through
+        /// <see cref="ServerReset"/>.
+        /// </summary>
+        /// <remarks>
+        /// **An empty body rather than an abstract method**, unlike
+        /// <see cref="OnServerInteract"/>. Every station has to answer a press, so making that one
+        /// abstract costs nothing; most stations have nothing of their own to put back — a box of
+        /// paper is not different after a round than before one — and making this abstract would
+        /// have them all write an empty override to say so. A station overrides this when it has
+        /// state of its own, and the ones that do not are correct without being asked.
+        ///
+        /// Note that a container on the station is **not** automatically emptied here. Whether a
+        /// container holds the last round's work or is simply stock is a question only the station
+        /// can answer — a printer's queue is the former and a supply box's shelf is the latter —
+        /// and a base class that guessed would empty the shelf.
+        /// </remarks>
+        protected virtual void OnServerReset()
+        {
+        }
     }
 }

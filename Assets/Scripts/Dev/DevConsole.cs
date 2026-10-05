@@ -177,7 +177,7 @@ namespace Overworked.Dev
         /// </summary>
         private static readonly string[] Verbs =
             { "spawn", "clear", "give", "tp", "pos", "team", "document", "docs", "queue", "printers",
-              "unlock", "unlocks", "tier", "requests", "score", "round", "start", "help" };
+              "unlock", "unlocks", "tier", "requests", "score", "round", "restart", "start", "help" };
 
 #if UNITY_EDITOR
         /// <summary>
@@ -436,6 +436,10 @@ namespace Overworked.Dev
                     ResetRound();
                     return;
 
+                case "restart":
+                    Restart();
+                    return;
+
                 case "start":
                     StartMatch();
                     return;
@@ -468,6 +472,7 @@ namespace Overworked.Dev
             Log("requests                                 list the live requests and what they name");
             Log("score <team> <points>                    move a team's score; negative takes points off");
             Log("round                                    zero the scores and put the round back before the whistle");
+            Log("restart                                  a whole new round: round, plus the office cleared");
             Log("start                                    begin the match now, sides by turns (the one-player seam)");
             Log("help                                     this");
             Log("Coordinates are grid cells; objects land on the cell centre.");
@@ -1164,11 +1169,16 @@ namespace Overworked.Dev
         /// <c>round</c>
         /// </summary>
         /// <remarks>
-        /// Puts the clock and the board back to the start of a round. **Documents and unlocks are
-        /// deliberately left alone**: a document is a permanent record of something that was
-        /// named, and the store's own remarks say it is never removed — so a restart numbers its
-        /// first contract after the last round's, which is untidy and harmless. Unlocks have their
-        /// own command.
+        /// Puts the clock and the board back to the start of a round, **and nothing else**.
+        /// Documents, unlocks, machines and the objects on the floor are all left where they are,
+        /// which is what makes this useful for poking at one thing: a tester who wants to watch the
+        /// clock again without losing the document they were holding types this, not
+        /// <c>restart</c>.
+        ///
+        /// It used to be the only reset there was, and its remarks said the store never forgets a
+        /// document — so a restarted round numbered its first contract after the last one's, which
+        /// was untidy and harmless while this was a testing seam. It is not harmless as the real
+        /// thing, and <c>restart</c> is now the real thing. See <see cref="Restart"/>.
         /// </remarks>
         private void ResetRound()
         {
@@ -1190,6 +1200,51 @@ namespace Overworked.Dev
             Log($"round reset: {board.TeamCount} team(s) back to 0, {Mathf.RoundToInt(board.Remaining)}s on the clock, " +
                 $"{requests?.Count ?? 0} request row(s) left. Documents and unlocks were not touched. " +
                 "The round is back before the whistle; 'start' begins it again.");
+        }
+
+        /// <summary>
+        /// <c>restart</c>
+        /// </summary>
+        /// <remarks>
+        /// A whole new round: everything <c>round</c> does, and the office with it. Loose objects
+        /// and folders gone, machines emptied, requests and unlocks cleared, customers back to
+        /// idle, scores at zero — see <see cref="MatchFlow.ServerRestart"/> for the order, which is
+        /// the part that is easy to get wrong and is the reason that method exists rather than this
+        /// one doing it.
+        ///
+        /// The console is the trigger while the game is being built. When the settlement exists it
+        /// will call the same method at the end of its own animation, and this command will still
+        /// work — a host whose round has fallen apart needs a way out that does not involve quitting
+        /// the process.
+        /// </remarks>
+        private void Restart()
+        {
+            if (!RequireServer())
+                return;
+
+            ScoreBoard board = ScoreBoard.Instance;
+            if (board == null)
+            {
+                Log("no ScoreBoard in the scene.");
+                return;
+            }
+
+            MatchFlow flow = MatchFlow.Instance;
+            if (flow == null)
+            {
+                Log("no MatchFlow in the scene, so nothing clears the office. " +
+                    "Put it on the same object as the ScoreBoard. 'round' still resets the clock.");
+                return;
+            }
+
+            if (!flow.ServerRestart())
+            {
+                Log("could not restart.");
+                return;
+            }
+
+            Log($"restarted: scores at 0, {Mathf.RoundToInt(board.Remaining)}s on the clock, the office cleared. " +
+                "Customers will be seated again once the match starts; 'start' begins it immediately.");
         }
 
         /// <summary>
@@ -1299,7 +1354,13 @@ namespace Overworked.Dev
 
                 ContainerBase queue = machine.Queue;
                 string fill = queue != null ? Describe(queue) : "no queue wired";
-                string printing = machine.PrintingDocument >= 0
+
+                /* Gated on the slot, not on the document id. They are written together and only
+                 * the slot is ever cleared, so a machine that has finished a job still carries the
+                 * last job's id — which means testing the id alone reports every machine that has
+                 * ever printed anything as still printing. The paired-field rule is on
+                 * Printer.PrintingDocument; this is the one reader that had it wrong. */
+                string printing = machine.PrintingSlot != 0
                     ? $"  printing document {machine.PrintingDocument}"
                     : string.Empty;
 

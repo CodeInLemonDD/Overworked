@@ -196,6 +196,21 @@ namespace Overworked.Stations
         }
 
         /// <summary>
+        /// Server: drops whatever the last round was fetching.
+        /// </summary>
+        /// <remarks>
+        /// The same clear <see cref="OnStopServer"/> does, for the same reason and with one more
+        /// behind it. A fetch in flight belongs to a round that has been cleared, and the document
+        /// it is waiting on has just been forgotten by the store — so a download allowed to finish
+        /// would look itself up, find nothing, and hand a machine a job it cannot print. Dropping it
+        /// costs the player the wait and nothing else, which is the right side to lose on.
+        ///
+        /// Clients see the list empty out on their own; it is a SyncList, and this is a server
+        /// write like any other.
+        /// </remarks>
+        protected override void OnServerReset() => _fetching.Clear();
+
+        /// <summary>
         /// Server: tells the asking client to open its panel.
         /// </summary>
         /// <remarks>

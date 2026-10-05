@@ -143,12 +143,18 @@ namespace Overworked.Npc
                 return;
             }
 
-            /* Nothing is asked for until the match begins. A round waiting on its players to pick
-             * sides is not a round yet, and seating customers through the wait would spend the
-             * round's own time limit on the waiting — the clock starts at the whistle, so the
-             * customers have to as well. Silence rather than a report: waiting is the normal state
-             * of a lobby, not a mistake. */
-            if (!scores.HasStarted)
+            /* Nothing is asked for until the match begins, and nothing is asked for once it has
+             * ended. A round waiting on its players to pick sides is not a round yet, and seating
+             * customers through the wait would spend the round's own time limit on the waiting — the
+             * clock starts at the whistle, so the customers have to as well. The other end is the
+             * same rule read backwards: a customer seated after the final whistle belongs to no
+             * round, and would put a request on the board that nothing can ever collect.
+             *
+             * The board rather than MatchFlow's phase, because this is the server and the board has
+             * the exact answer — the phase is the readout's copy of it and is up to a poll behind.
+             * See MatchFlow. Silence rather than a report: waiting is the normal state of a lobby,
+             * and so is a finished round. */
+            if (!scores.HasStarted || scores.IsOver)
                 return;
 
             /* Asked in this order so the common case — the office is already staffed — costs one

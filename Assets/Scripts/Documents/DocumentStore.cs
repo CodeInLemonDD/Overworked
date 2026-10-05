@@ -249,6 +249,25 @@ namespace Overworked.Documents
         }
 
         /// <summary>
+        /// Server: forgets every document in the round.
+        /// </summary>
+        /// <remarks>
+        /// **Called when a round is cleared, and never during one.** The class remarks say an id is
+        /// never removed — that is what lets everything holding one skip a deleted state — and this
+        /// is the one moment that rule is suspended, so it is worth being precise about what makes
+        /// it safe. Clearing invalidates every id at once, and by then nothing is still holding one:
+        /// the request rows, the unlock list, the printers' queues and the objects in the office have
+        /// all been cleared first. See <see cref="Match.MatchFlow"/>'s clearing order.
+        ///
+        /// Numbering is what makes this cheap. <see cref="NextNumber"/> counts by scanning the list
+        /// rather than by keeping a cursor, precisely so that there is no second piece of state to
+        /// reset here — the remark on that method calls forgetting a cursor one of the two ways this
+        /// goes silently wrong, and there is nothing to forget.
+        /// </remarks>
+        [Server]
+        public void ServerClear() => _documents.Clear();
+
+        /// <summary>
         /// Server: the next free number for a kind, within one team.
         /// </summary>
         /// <remarks>

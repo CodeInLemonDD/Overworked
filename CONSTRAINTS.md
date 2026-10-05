@@ -5,7 +5,7 @@
 1. **硬约束** —— 读 FishNet 4.7.3 源码核实过的,和玩法无关,换多少轮设计都不变,但违反任何一条都会当场坏掉
 2. **已冻结的接口** —— P0 产出的容器与 payload 机制,依赖它的模块按这里的签名写,不要自己另起一套
 
-最后更新:2026-10-01(第二轮)
+最后更新:2026-10-05(第五轮)
 
 ---
 
@@ -226,12 +226,21 @@ public abstract class StationBase : NetworkBehaviour
 
     [Server] public void ServerInteract(PlayerInteraction player, NetworkConnection conn, bool longPress);
     protected abstract void OnServerInteract(PlayerInteraction player, NetworkConnection conn, bool longPress);
+
+    [Server] public void ServerReset();          // 回合清场时,MatchFlow 对每个工位调一次
+    protected virtual void OnServerReset();      // 有自己状态的工位覆写它;默认是空的
 }
 ```
 
 **工位继承它,覆写 `OnServerInteract`。**
 
-**不要给 `OnServerInteract` 加 `[Server]`。** weaver 是靠**改写方法体**插入守卫的,而抽象方法没有方法体 —— 标上去会让 weaver 空引用。守卫在具体的 `ServerInteract` 上,覆写者只能经由它被调用。
+**不要给 `OnServerInteract` 加 `[Server]`。** weaver 是靠**改写方法体**插入守卫的,而抽象方法没有方法体 —— 标上去会让 weaver 空引用。守卫在具体的 `ServerInteract` 上,覆写者只能经由它被调用。`ServerReset` / `OnServerReset` 是同一条规矩的另一半。
+
+**`OnServerReset` 是 `virtual` 而不是 `abstract`,和 `OnServerInteract` 不一样,这是有意的。** 每个工位都要回答一次按键,所以那个做成抽象不花任何人的成本;而**大多数工位根本没有东西需要归零** —— 一箱纸在回合前后没有区别 —— 做成抽象会逼它们各写一个空覆写来说这件事。
+
+**推论:工位上的容器不会自动被清空。** 一个容器装的是「上一回合的活」还是「库存」,只有工位自己知道(打印机的队列是前者,原料箱的架子是后者),基类猜错就会把架子一起清掉。
+
+**新增工位时看一眼:** 如果它有自己的状态(队列、时钟、进行中的活),就得覆写 `OnServerReset`。忘了的表现是「第二局带着上一局的状态开局」,而且**不报任何错**。
 
 工位靠**自己的碰撞体**被玩家的扇区检测找到。`InteractReach` 只是服务端的粗校验,用来防止改过的客户端隔着地图操作机器 —— 客户端找到工位时已经判定过一次距离了。
 
