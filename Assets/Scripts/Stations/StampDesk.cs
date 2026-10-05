@@ -113,6 +113,11 @@ namespace Overworked.Stations
         private readonly List<NetworkGrabbable> _scanBuffer = new();
 
         /// <summary>
+        /// Which complaint has already been made, so it is said once rather than once per press.
+        /// </summary>
+        private string _reported;
+
+        /// <summary>
         /// Server: stamps everything lying on the desk.
         /// </summary>
         /// <remarks>
@@ -134,10 +139,46 @@ namespace Overworked.Stations
 
             IntakeVolume.CollectInside(NetworkManager, transform, _intakeCentre, _intakeHalfExtents, _scanBuffer);
 
+            /* **Held long enough, and there was nothing on the desk.** Said out loud because it is
+             * the one failure this machine has that cannot be told from the other one by looking:
+             * a press that never arrived and a press that arrived at an empty desk look identical
+             * from the player's side — nothing happens either way — and they are fixed in
+             * completely different places.
+             *
+             * The numbers are in the message because the question being asked is a geometric one:
+             * either the contract is not where this box is, or this box is not where the contract
+             * is, and the reader can tell which by looking at the desk. */
+            if (_scanBuffer.Count == 0)
+            {
+                ReportOnce(
+                    $"a press was held for {heldSeconds:0.0}s and reached the desk, but nothing is inside its box " +
+                    $"(centre {_intakeCentre}, half extents {_intakeHalfExtents}, in this object's own space)");
+
+                return;
+            }
+
             for (int i = 0; i < _scanBuffer.Count; i++)
                 TryStamp(_scanBuffer[i]);
 
             _scanBuffer.Clear();
+        }
+
+        /// <summary>
+        /// Says once that something is wrong.
+        /// </summary>
+        /// <remarks>
+        /// Once per distinct complaint, matching every other machine in the project: this runs from
+        /// a press rather than a timer, but a player leaning on the key would otherwise fill the
+        /// console with the same line.
+        /// </remarks>
+        private void ReportOnce(string reason)
+        {
+            if (_reported == reason)
+                return;
+
+            _reported = reason;
+
+            Debug.LogError($"{nameof(StampDesk)} on {gameObject.name}: {reason}.", this);
         }
 
         /// <summary>
