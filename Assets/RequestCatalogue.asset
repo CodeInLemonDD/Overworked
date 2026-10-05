@@ -16,17 +16,15 @@ MonoBehaviour:
   - Wanted:
     - SpecIndex: 0
       Count: 1
+  - Wanted:
+    - SpecIndex: 0
+      Count: 1
     - SpecIndex: 1
       Count: 1
   - Wanted:
     - SpecIndex: 0
       Count: 1
     - SpecIndex: 1
-      Count: 2
-  - Wanted:
-    - SpecIndex: 0
       Count: 1
-    - SpecIndex: 1
-      Count: 3
-    - SpecIndex: 3
+    - SpecIndex: 2
       Count: 1

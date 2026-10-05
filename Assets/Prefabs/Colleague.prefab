@@ -765,10 +765,10 @@ GameObject:
   m_Component:
   - component: {fileID: 3596093322390543650}
   - component: {fileID: 1457668927569843694}
-  - component: {fileID: 5996725676857308954}
   - component: {fileID: 7466742933488343796}
+  - component: {fileID: 6234082698546376425}
   m_Layer: 0
-  m_Name: Customer
+  m_Name: Colleague
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -823,7 +823,7 @@ MonoBehaviour:
   _teleportThreshold: 1
   <PrefabId>k__BackingField: 4
   <SpawnableCollectionId>k__BackingField: 0
-  <AssetPathHash>k__BackingField: 4033140452414907257
+  <AssetPathHash>k__BackingField: 4088973007388613459
   SceneId: 0
   SerializedTransformProperties:
     Position: {x: -0, y: 0, z: -0}
@@ -849,32 +849,6 @@ MonoBehaviour:
   _preventDespawnOnDisconnect: 0
   _defaultDespawnType: 0
   _initializedTimestamp: -8584107645980061830
---- !u!114 &5996725676857308954
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 6670257001723914196}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 555fa1fdcdeb7f74dba89f79ff4a1f9e, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::Overworked.Npc.Customer
-  _componentIndexCache: 255
-  _addedNetworkObject: {fileID: 1457668927569843694}
-  _networkObjectCache: {fileID: 0}
-  _interactReach: 2.5
-  _holdSeconds: 0.3
-  _waitingSeconds: 20
-  _patienceSeconds: 30
-  _writeInterval: 0.2
-  _rewardPoints: 10
-  _penaltyPoints: 5
-  _intakeCentre: {x: 0, y: 0.5, z: 0}
-  _intakeHalfExtents: {x: 0.9, y: 0.7, z: 0.9}
-  _idleOffset: {x: 0, y: 0, z: 0}
-  _moveSpeed: 2
 --- !u!65 &7466742933488343796
 BoxCollider:
   m_ObjectHideFlags: 0
@@ -896,6 +870,36 @@ BoxCollider:
   serializedVersion: 3
   m_Size: {x: 1, y: 1.4, z: 0.5}
   m_Center: {x: 0, y: 0.7, z: 0}
+--- !u!114 &6234082698546376425
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6670257001723914196}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 1d8a97986e8cb8c498378e75fce4ed76, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Overworked.Npc.Colleague
+  _componentIndexCache: 255
+  _addedNetworkObject: {fileID: 1457668927569843694}
+  _networkObjectCache: {fileID: 0}
+  _interactReach: 2.5
+  _waitingSeconds: 20
+  _patienceSeconds: 60
+  _writeInterval: 0.2
+  _rewardPoints: 10
+  _penaltyPoints: 5
+  _intakeCentre: {x: 0, y: 0.5, z: 0}
+  _intakeHalfExtents: {x: 0.9, y: 0.7, z: 0.9}
+  _idleOffset: {x: 0, y: 0, z: 0}
+  _moveSpeed: 2
+  _wants:
+  - SpecIndex: 2
+    Count: 1
+  - SpecIndex: 3
+    Count: 1
 --- !u!1 &7080774052205174901
 GameObject:
   m_ObjectHideFlags: 0
