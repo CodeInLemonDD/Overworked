@@ -16,14 +16,34 @@ namespace Overworked.Npc
     /// walk would read as bad luck instead, which is a different and much worse feeling to play
     /// against. Do not add wandering.
     ///
-    /// She is a plain MonoBehaviour with no NetworkObject. Her patrol is deterministic — same
-    /// waypoints, same speed, no input — so every peer can run it locally and they will agree
-    /// closely enough to look right, without paying to replicate a transform nobody interacts
-    /// with. Only the removal of objects has to be authoritative, so only that is gated on the
-    /// server.
+    /// **The server walks her, and nothing else does.** This used to run on every peer, on the
+    /// argument that a fixed route walked at a constant speed is the same walk everywhere and a
+    /// transform nobody can touch is not worth replicating. Both halves of that were wrong.
     ///
-    /// She has no collider on purpose. She must not shove the objects she is about to collect,
-    /// and a player being pushed around by the janitor is not a mechanic anyone asked for.
+    /// The walk is a sum of per-frame delta times, so it is not the same walk everywhere — it
+    /// starts from whenever that peer's copy of her became active. A client joining a session in
+    /// progress begins at the first waypoint while the host has her halfway round the office. That
+    /// was invisible for exactly as long as she was intangible, and it is the reason she is no
+    /// longer intangible: an obstacle whose position is decided separately by each machine is an
+    /// obstacle that pushes players differently on each machine, which reads as the game arguing
+    /// with itself. There is a <see cref="NetworkTransform"/> on her prefab; it needs to be there,
+    /// because without it every client but the host will see her standing at the origin.
+    ///
+    /// Simulating her on the server has a second benefit that is easy to miss: the removal of
+    /// objects is server-only anyway, so the walking and the taking now happen on the same
+    /// machine, against the same position, instead of the server collecting from a place it
+    /// believes she is.
+    ///
+    /// **She has a collider, and that is a reversal.** She was built without one, on the argument
+    /// that she must not shove the objects she is about to collect and that nobody asked to be
+    /// pushed around by a janitor. The second half is now wanted — a janitor you can walk through
+    /// reads as scenery rather than as somebody in the room — and the first half is traded away
+    /// knowingly. What makes the trade affordable is that she is a kinematic body moved by writing
+    /// its transform, so she carries no velocity as far as the solver is concerned: an object she
+    /// walks into is eased out of the way rather than launched, and she collects it a moment later
+    /// anyway. If that turns out to look wrong, the fix is a collision layer — her and the player
+    /// on their own two layers, the pair between her and <c>Default</c> switched off — and not a
+    /// line of code.
     ///
     /// Table tops and container interiors are safe by construction, not by inspection:
     /// anything placed on a surface is flagged with a cell, and container contents are entries
@@ -124,12 +144,14 @@ namespace Overworked.Npc
 
         private void Update()
         {
-            Patrol(Time.deltaTime);
-
-            /* Gate on the started check rather than the IsServer alias: same value, but the
-             * alias is [Obsolete] in this version. */
+            /* Everything she does is the server's, including the walking — see the class remarks
+             * for why the walk stopped being something every peer runs. Gate on the started check
+             * rather than the IsServer alias: same value, but the alias is [Obsolete] in this
+             * version. */
             if (!InstanceFinder.IsServerStarted)
                 return;
+
+            Patrol(Time.deltaTime);
 
             _cleanTimer += Time.deltaTime;
             if (_cleanTimer < _cleanInterval)
@@ -143,9 +165,9 @@ namespace Overworked.Npc
         /// Walks her one step along the loop and points her the way she is going.
         /// </summary>
         /// <remarks>
-        /// Runs on every peer. Her height is taken from her own transform rather than from the
-        /// waypoints, so a route authored flat on the floor still works if she is ever placed
-        /// on a raised platform.
+        /// Server only, and reached only from <see cref="Update"/>. Her height is taken from her
+        /// own transform rather than from the waypoints, so a route authored flat on the floor
+        /// still works if she is ever placed on a raised platform.
         /// </remarks>
         private void Patrol(float deltaTime)
         {

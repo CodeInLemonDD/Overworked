@@ -18,9 +18,8 @@ namespace Overworked.Npc
     /// touches a customer's lifetime; it only decides which one is next.
     ///
     /// **Server only.** Making requests means naming documents, and naming documents is a server
-    /// operation. Like <see cref="Cleaner"/> this is a plain MonoBehaviour that checks rather than
-    /// a network behaviour: there is no replicated state of its own, and every object it touches
-    /// carries its own.
+    /// operation. This is a plain MonoBehaviour that checks rather than a network behaviour: there
+    /// is no replicated state of its own, and every object it touches carries its own.
     ///
     /// **This is the console's <c>tier</c> command with a trigger attached.** The shape is
     /// deliberately the same one — read the board's cursor, name every document the tier asks for
