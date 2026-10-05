@@ -33,6 +33,20 @@ namespace Overworked.Stations
     /// makes those, and it only makes them for kinds whose catalogue entry asks for a stamp, so
     /// there is nothing to check — and re-checking would mean this machine knew about the catalogue
     /// for no gain. A sheet that is already stamped is left alone, which costs one comparison.
+    ///
+    /// **Its own collider has to stop at the desk surface, and this is the one station where that
+    /// matters.** Every other intake takes what it is given out of the world — the printer swallows
+    /// the sheet, a folder swallows the document, a customer swallows the whole folder — so an
+    /// object that briefly overlaps a machine's collider is gone before anything resolves it. This
+    /// one leaves the sheet exactly where it is, and a collider taller than the desk means the sheet
+    /// is set down *inside* it: physics resolves the overlap by pushing it out, and it leaves at
+    /// whatever speed that takes.
+    ///
+    /// The symptom is a contract that flies off the desk the moment it is put down. That reads as
+    /// the physics engine misbehaving, not as a collider nobody sized, and it is worth saying here
+    /// because the obvious first move is to go looking in this file — where there is nothing to
+    /// find. Author the collider to the desktop and no higher: not over the stamp and the pen
+    /// standing on it, which would put the invisible wall back.
     /// </remarks>
     [DisallowMultipleComponent]
     public class StampDesk : StationBase
