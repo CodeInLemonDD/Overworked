@@ -283,9 +283,16 @@ namespace Overworked.Dev
             if (!_open || !_commandsEnabled)
                 return;
 
-            /* The toggle key is a character key, so opening the console also delivers its own
-             * backtick. Only that character, and only on the frame it happened. */
-            if (Time.frameCount == _swallowFrame && (character == '`' || character == '~'))
+            /* **The toggle key is a character key, and which character it produces is the
+             * keyboard's business, not ours.** Backquote is ` on a US layout and ~ with shift —
+             * and · under a Chinese IME, which is the layout this game is played on. Naming the
+             * characters does not work; naming one of them actively hurts, because the guard then
+             * looks correct while letting the real one through.
+             *
+             * What does work is that nothing else can legitimately be typed on the frame the
+             * console was opened: gameplay input was switched off microseconds earlier, in the same
+             * block that set this frame. So the frame swallows any character at all. */
+            if (Time.frameCount == _swallowFrame && !char.IsControl(character))
                 return;
 
             /* Control characters are the keys that are not text — backspace, escape, the arrows.

@@ -606,7 +606,32 @@ namespace Overworked.Interaction
         {
             if (_stationTarget == null)
                 return;
-            if (_interactAction == null || !_interactAction.WasReleasedThisFrame())
+            if (_interactAction == null)
+                return;
+
+            float heldSeconds = Time.time - _stationPressTime;
+
+            /* **A hold is spent the moment it is long enough, not when the key comes up.** The
+             * machine acts while the player is still holding, which is the difference between
+             * stamping a contract and letting go of the key and finding out afterwards that you
+             * did. Waiting for the release also makes every hold feel the same length from the
+             * inside, because the only feedback is the thing happening.
+             *
+             * The value sent is the one that was just compared against, so the server's own check
+             * against the same number cannot disagree with the client's by a frame — see
+             * StationBase.ServerInteract. */
+            if (_interactAction.IsPressed() && heldSeconds >= _stationTarget.HoldSeconds)
+            {
+                StationBase held = _stationTarget;
+
+                _stationTarget = null;
+                _deferredPickup = null;
+
+                CmdInteractWith(held.NetworkObject, heldSeconds);
+                return;
+            }
+
+            if (!_interactAction.WasReleasedThisFrame())
                 return;
 
             StationBase station = _stationTarget;
@@ -620,12 +645,13 @@ namespace Overworked.Interaction
             if (station == null)
                 return;
 
-            float heldSeconds = Time.time - _stationPressTime;
-
             /* **A tap takes the object; a hold uses the machine.** How long a hold is, is the
              * machine's own business — see StationBase.HoldSeconds. That number is what makes a desk
              * with a contract lying on it usable at all: without it the press would pick the
-             * contract up and the desk would never hear about it. */
+             * contract up and the desk would never hear about it.
+             *
+             * This is also where a press that reached the threshold on the very frame it was
+             * released ends up, since the branch above only fires while the key is still down. */
             if (grabbable != null && heldSeconds < station.HoldSeconds)
             {
                 if (!grabbable.IsSpawned)
