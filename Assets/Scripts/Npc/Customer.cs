@@ -329,6 +329,53 @@ namespace Overworked.Npc
         /// </summary>
         public float WaitingRemaining => IsServerInitialized ? _exactWaiting : _waiting.Value;
 
+        /// <summary>
+        /// Whether this NPC gives up on his own when nobody takes the request.
+        /// </summary>
+        /// <remarks>
+        /// True for a customer, and the whole point of him: he is one of a queue standing in the
+        /// office, and one nobody ever takes has to clear the way for the next. False for anything
+        /// that is a fixture — see <see cref="Colleague"/>, whose offer stands until somebody
+        /// bothers to answer it, because there is no queue behind him and nobody to replace him
+        /// with.
+        ///
+        /// Read by <see cref="RequestLabel"/> as well as by <see cref="AdvanceClocks"/>, which is
+        /// why it is public rather than protected: the label has to know not to draw a countdown
+        /// that is not running.
+        /// </remarks>
+        public virtual bool UsesWaitingClock => true;
+
+        /// <summary>
+        /// Whether this NPC writes its own request rather than being handed one.
+        /// </summary>
+        /// <remarks>
+        /// False for a customer: he is a seat in a queue, and <see cref="CustomerSpawner"/> fills
+        /// empty seats from the tier table.
+        ///
+        /// **True for a fixture that already knows what it wants** — see <see cref="Colleague"/>,
+        /// which authors its own trade. This has to be a property of the NPC rather than a check in
+        /// the spawner because the spawner searches with <c>FindObjectsByType&lt;Customer&gt;</c>,
+        /// and that returns derived types: without a way to tell them apart, a colleague standing in
+        /// the office reads as an empty seat, and the first thing the spawner does with an empty
+        /// seat is hand it a customer's request — straight over the top of the trade it just wrote
+        /// for itself.
+        /// </remarks>
+        public virtual bool ProvidesOwnRequest => false;
+
+        /// <summary>
+        /// A second line for the label, or null for none.
+        /// </summary>
+        /// <remarks>
+        /// What this NPC is giving back. A customer gives points, which the scoreboard in the
+        /// corner already says, so he has nothing to add here — but a colleague's whole reason for
+        /// being interesting is what he is holding, and a trade whose reward cannot be seen before
+        /// you agree to it is not a trade.
+        ///
+        /// Answered as a string rather than as an NPC type so that the label stays ignorant of who
+        /// it is drawing; see <see cref="RequestLabel"/>.
+        /// </remarks>
+        public virtual string OfferLabel => null;
+
         private void Awake()
         {
             /* Where it was placed is where it serves from; the idle spot is an offset from it, so
@@ -650,21 +697,86 @@ namespace Overworked.Npc
             if (!Meets(team, folder))
                 return false;
 
-            RequestBoard board = RequestBoard.Instance;
-            if (board != null)
-                board.ServerRemove(_requestId.Value);
-
-            ScoreBoard scores = ScoreBoard.Instance;
-            if (scores != null)
-                scores.ServerAward(team, _rewardPoints);
+            /* **Nothing comes off the board here.** It used to, immediately before PayOut, and it
+             * was redundant even then: GoIdle takes the request down at the end of this method, and
+             * GoIdle is reached on every path that gets this far. What it was not is harmless — an
+             * NPC whose offer belongs to each team in turn has to leave his request standing while
+             * the other side has its go, and a removal here took it away from them the moment the
+             * first team finished. See FinishTeam. */
+            PayOut(team);
 
             /* Destroy rather than pool: the folder carries per-life state — its team colour, the
              * documents filed in it — that a recycled instance would bring back with it. Same as
              * every other container in the project that consumes what it was given. */
             folder.NetworkObject.Despawn(DespawnType.Destroy);
 
-            GoIdle();
+            /* This team is out of the running for this NPC. Bookkeeping rather than a charge: what
+             * the delivering team got was settled by PayOut a moment ago, and Penalise is not
+             * involved. Writing it into the phase list is what makes "already delivered" and "ran
+             * out of time" one state from here on, which is what lets an NPC whose offer is
+             * per-team ask the same question of both — see FinishTeam. */
+            _phases[team] = (byte)CustomerPhase.Failed;
+            _exactRemaining[team] = 0f;
+            _remaining[team] = 0f;
+
+            if (FinishTeam(team))
+                GoIdle();
+
             return true;
+        }
+
+        /// <summary>
+        /// Server: whether one team being finished finishes this NPC's request.
+        /// </summary>
+        /// <remarks>
+        /// **True for a customer, and the whole point of him.** His ask is a race: both teams see
+        /// the same request, both may work on it, and the first folder that lands ends it for
+        /// everybody. The losing team keeps their documents and has wasted the trip.
+        ///
+        /// False until every team is out, for anything whose offer is per-team rather than a race
+        /// — see <see cref="Colleague"/>. The caller has already written "this team is out" into
+        /// the phase list by the time this runs, so an override can simply ask
+        /// <see cref="PhaseOf"/> about the others.
+        /// </remarks>
+        /// <param name="team">The team that has just finished.</param>
+        /// <returns>True when the request should come off the board.</returns>
+        protected virtual bool FinishTeam(int team) => true;
+
+        /// <summary>
+        /// Server: what this NPC does for a team that brought him what he asked for.
+        /// </summary>
+        /// <remarks>
+        /// **The one thing two kinds of NPC do differently.** Everything else about taking a
+        /// request, waiting on it and judging a folder is the same whether the person asking is a
+        /// customer or a colleague — see <see cref="Colleague"/> — and the only place they part
+        /// company is what the delivering team gets out of it. A customer pays points; a colleague
+        /// hands over a document.
+        ///
+        /// Called while the request is **still on the board** — whether it comes down is decided
+        /// afterwards, by <see cref="FinishTeam"/>. An override gets no say in that and should not
+        /// read the board expecting either answer.
+        /// </remarks>
+        protected virtual void PayOut(int team)
+        {
+            ScoreBoard scores = ScoreBoard.Instance;
+            if (scores != null)
+                scores.ServerAward(team, _rewardPoints);
+        }
+
+        /// <summary>
+        /// Server: what this NPC does to a team that ran out of patience with him.
+        /// </summary>
+        /// <remarks>
+        /// The other half of <see cref="PayOut"/>, and overridden for the same reason. Doing
+        /// nothing is a legitimate answer: a colleague who gives nothing back when you fail him has
+        /// already cost you the document, and taking points as well would charge twice for one
+        /// mistake.
+        /// </remarks>
+        protected virtual void Penalise(int team)
+        {
+            ScoreBoard scores = ScoreBoard.Instance;
+            if (scores != null)
+                scores.ServerAward(team, -_penaltyPoints);
         }
 
         /// <summary>
@@ -739,7 +851,11 @@ namespace Overworked.Npc
                     allFailed = false;
             }
 
-            bool waitingShouldRun = !anyWorking && !allFailed;
+            /* An NPC with no waiting clock simply never has one running, which turns the whole
+             * block below into the "all teams are out" check and nothing else — see
+             * UsesWaitingClock. Written as one condition rather than as an early return so that
+             * there is still exactly one place that decides whether the waiting clock runs. */
+            bool waitingShouldRun = UsesWaitingClock && !anyWorking && !allFailed;
 
             if (waitingShouldRun && !_waitingRunning)
             {
@@ -823,9 +939,7 @@ namespace Overworked.Npc
             _exactRemaining[team] = 0f;
             _remaining[team] = 0f;
 
-            ScoreBoard scores = ScoreBoard.Instance;
-            if (scores != null)
-                scores.ServerAward(team, -_penaltyPoints);
+            Penalise(team);
         }
 
         /// <summary>
@@ -980,7 +1094,17 @@ namespace Overworked.Npc
             transform.position = Vector3.MoveTowards(transform.position, target, _moveSpeed * Time.deltaTime);
         }
 
-        private void Update() => UpdatePresence();
+        /// <summary>
+        /// Drives the idle shuffle.
+        /// </summary>
+        /// <remarks>
+        /// Virtual so that anything deriving from this gets a frame without declaring a second
+        /// <c>Update</c> of its own. A subclass writing <c>private void Update()</c> would compile
+        /// — the compiler warns that it hides this one and the project's baseline already carries
+        /// three of those warnings — and would stop the shuffle dead, on every peer, for reasons
+        /// nobody would connect to the new file.
+        /// </remarks>
+        protected virtual void Update() => UpdatePresence();
 
         private void OnDrawGizmosSelected()
         {

@@ -193,52 +193,16 @@ namespace Overworked.Npc
 
             _rows.Clear();
 
-            if (wanted.Wanted != null)
-            {
-                for (int i = 0; i < wanted.Wanted.Length; i++)
-                {
-                    RequestCatalogue.RequestEntry entry = wanted.Wanted[i];
-
-                    for (int n = 0; n < entry.Count; n++)
-                    {
-                        int number = -1;
-
-                        for (int team = 0; team < teamCount; team++)
-                        {
-                            int id = store.ServerCreate(entry.SpecIndex, team);
-                            store.TryGet(id, out DocumentRecord record);
-
-                            /* **Nothing is granted here, and that is the point.** A customer
-                             * saying what it wants is not the same as a customer handing anything
-                             * over: the document is named, and stays unprintable, until somebody
-                             * walks up to this customer and takes the job. Granting at this moment
-                             * was the first thing this did, and it handed both teams the whole
-                             * request the instant it appeared — a race nobody had to run, and the
-                             * other side's paperwork sitting on your own computer.
-                             *
-                             * What a team gets, it gets on <see cref="Customer.ServerAccept"/>,
-                             * and it gets its own copies. */
-
-                            if (team == 0)
-                            {
-                                number = record.Number;
-                                continue;
-                            }
-
-                            if (record.Number != number)
-                            {
-                                Debug.LogError(
-                                    $"{nameof(CustomerSpawner)} on {gameObject.name}: team {team} was given number {record.Number} " +
-                                    $"for spec {entry.SpecIndex} where team 0 was given {number}. The teams have drifted apart, " +
-                                    "and deliveries will stop matching.",
-                                    this);
-                            }
-                        }
-
-                        _rows.Add(new DocumentRequest { SpecIndex = entry.SpecIndex, Number = number });
-                    }
-                }
-            }
+            /* **Nothing is granted here, and that is the point.** A customer saying what it wants
+             * is not the same as a customer handing anything over: the documents are named, and
+             * stay unprintable, until somebody walks up to this customer and takes the job.
+             * Granting at this moment was the first thing this did, and it handed both teams the
+             * whole request the instant it appeared — a race nobody had to run, and the other
+             * side's paperwork sitting on your own computer.
+             *
+             * What a team gets, it gets on <see cref="Customer.ServerAccept"/>, and it gets its own
+             * copies. */
+            RequestWriter.Name(wanted.Wanted, store, teamCount, _rows, this);
 
             int requestId = board.ServerCreate(_rows);
 
@@ -266,7 +230,7 @@ namespace Overworked.Npc
 
             for (int i = 0; i < _customers.Length; i++)
             {
-                if (_customers[i] != null && _customers[i].HasRequest)
+                if (IsSeat(_customers[i]) && _customers[i].HasRequest)
                     waiting++;
             }
 
@@ -293,7 +257,7 @@ namespace Overworked.Npc
             {
                 Customer candidate = _customers[i];
 
-                if (candidate == null || candidate.HasRequest)
+                if (!IsSeat(candidate) || candidate.HasRequest)
                     continue;
 
                 customer = candidate;
@@ -302,6 +266,20 @@ namespace Overworked.Npc
 
             return false;
         }
+
+        /// <summary>
+        /// Whether this one is a seat the spawner is responsible for filling.
+        /// </summary>
+        /// <remarks>
+        /// One method rather than the same condition written twice, because the two callers have to
+        /// agree: a candidate counted as waiting but never found as idle would make the office look
+        /// staffed while nothing was ever seated in it, and the bug would look like a spawner that
+        /// had stopped.
+        ///
+        /// The search returns derived types, so this is what keeps anything that authors its own
+        /// request out of the queue — see <see cref="Customer.ProvidesOwnRequest"/>.
+        /// </remarks>
+        private static bool IsSeat(Customer candidate) => candidate != null && !candidate.ProvidesOwnRequest;
 
         /// <summary>
         /// Makes sure the customer list is there, and refreshes it if it is not.

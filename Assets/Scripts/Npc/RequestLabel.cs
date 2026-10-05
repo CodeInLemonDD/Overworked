@@ -250,9 +250,33 @@ namespace Overworked.Npc
 
             _builder.Clear();
             AppendWanted();
+            AppendOffer();
             AppendClock();
 
             _text.text = _builder.ToString();
+        }
+
+        /// <summary>
+        /// Writes what this NPC is giving back, when he is giving something.
+        /// </summary>
+        /// <remarks>
+        /// **A trade whose reward cannot be seen before agreeing to it is not a trade**, it is a
+        /// chore — so the line that says what is being handed over matters more than the one saying
+        /// what is wanted. A customer answers null here: his reward is points, and the scoreboard in
+        /// the corner already says what those are worth.
+        ///
+        /// Asked of the NPC rather than checked by type, so that this label keeps working for
+        /// anything that wants a line of its own without learning what kinds of NPC exist. See
+        /// <see cref="Customer.OfferLabel"/>.
+        /// </remarks>
+        private void AppendOffer()
+        {
+            string offer = _customer.OfferLabel;
+
+            if (string.IsNullOrEmpty(offer))
+                return;
+
+            _builder.Append('\n').Append(offer);
         }
 
         /// <summary>
@@ -321,6 +345,15 @@ namespace Overworked.Npc
                     return;
 
                 default:
+                    /* Not every NPC gives up on his own. One that does not has no waiting clock to
+                     * draw, and "等待 0s" would be the label announcing a countdown that is not
+                     * running — a number frozen at zero reads as the game having stopped. */
+                    if (!_customer.UsesWaitingClock)
+                    {
+                        _builder.Append("未接单");
+                        return;
+                    }
+
                     _builder.Append("等待 ").Append(Mathf.CeilToInt(_customer.WaitingRemaining)).Append('s');
                     return;
             }
