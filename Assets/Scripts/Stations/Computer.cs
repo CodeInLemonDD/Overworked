@@ -221,7 +221,7 @@ namespace Overworked.Stations
         /// The press length is ignored: there is one verb, and how long the key was held does not
         /// change what it means.
         /// </remarks>
-        protected override void OnServerInteract(PlayerInteraction player, NetworkConnection conn, bool longPress)
+        protected override void OnServerInteract(PlayerInteraction player, NetworkConnection conn, float heldSeconds)
         {
             if (player == null || conn == null)
                 return;

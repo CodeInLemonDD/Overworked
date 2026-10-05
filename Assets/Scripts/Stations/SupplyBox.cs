@@ -307,7 +307,7 @@ namespace Overworked.Stations
         /// job is to hold one side's paperwork, so it is stamped with the asking player's team.
         /// See the call below for why that cannot be decided anywhere else.
         /// </remarks>
-        protected override void OnServerInteract(PlayerInteraction player, NetworkConnection conn, bool longPress)
+        protected override void OnServerInteract(PlayerInteraction player, NetworkConnection conn, float heldSeconds)
         {
             if (player == null || conn == null || _container == null)
                 return;

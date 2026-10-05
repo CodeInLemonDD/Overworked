@@ -45,6 +45,31 @@ namespace Overworked.Stations
         public float InteractReach => _interactReach;
 
         /// <summary>
+        /// How long a press has to be held for this station to consider it a hold rather than a tap.
+        /// </summary>
+        /// <remarks>
+        /// **The station owns this number, not the player.** A tap in front of a machine means "take
+        /// the thing in front of me" and a hold means "use the machine", which is a distinction the
+        /// player has to make before it knows whether a station is even involved — so it asks. Most
+        /// stations never see a hold at all: they act on any press, and their answer here only
+        /// decides how long somebody has to hold before the machine is reached instead of the object
+        /// standing in front of it.
+        ///
+        /// A station that needs a deliberate press overrides this. See
+        /// <see cref="StampDesk.HoldSeconds"/>, which is the one place in the game where the length
+        /// of the press is the mechanic.
+        /// </remarks>
+        [Tooltip("Seconds the press must be held for the hold to belong to this station rather than to what is in front of it.")]
+        [Min(0f)]
+        [SerializeField]
+        private float _holdSeconds = 0.3f;
+
+        /// <summary>
+        /// Seconds a press must be held for this station to count it as a hold.
+        /// </summary>
+        public virtual float HoldSeconds => _holdSeconds;
+
+        /// <summary>
         /// Server: a player interacted with this station.
         /// </summary>
         /// <remarks>
@@ -60,18 +85,20 @@ namespace Overworked.Stations
         /// <param name="conn">
         /// The connection that asked. Range has already been checked by the caller.
         /// </param>
-        /// <param name="longPress">
-        /// True when the press was held past the threshold. Stations that do not care which it
-        /// was may ignore it.
+        /// <param name="heldSeconds">
+        /// How long the key was down, as the asking client measured it. **Not evidence** — a
+        /// modified client can send any number, and there is no way for the server to have watched
+        /// the key. It is here because the length of a press is a real mechanic in one place, and a
+        /// station that acts on it is trusting the client in the same way throwing already does.
         /// </param>
         [Server]
-        public void ServerInteract(PlayerInteraction player, NetworkConnection conn, bool longPress) =>
-            OnServerInteract(player, conn, longPress);
+        public void ServerInteract(PlayerInteraction player, NetworkConnection conn, float heldSeconds) =>
+            OnServerInteract(player, conn, heldSeconds);
 
         /// <summary>
         /// Server: does the work. Only ever reached through <see cref="ServerInteract"/>.
         /// </summary>
-        protected abstract void OnServerInteract(PlayerInteraction player, NetworkConnection conn, bool longPress);
+        protected abstract void OnServerInteract(PlayerInteraction player, NetworkConnection conn, float heldSeconds);
 
         /// <summary>
         /// Server: puts this station back to how it starts a round.

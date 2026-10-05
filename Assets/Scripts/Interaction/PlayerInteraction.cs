@@ -202,13 +202,6 @@ namespace Overworked.Interaction
         private float _stationHalfAngle = 75f;
 
         /// <summary>
-        /// Presses at or over this duration are sent to a station as a long press.
-        /// </summary>
-        [Tooltip("Presses at or over this duration are sent to a station as a long press.")]
-        [SerializeField]
-        private float _stationLongPressSeconds = 0.3f;
-
-        /// <summary>
         /// Which team this player is on. Team A until somebody says otherwise.
         /// </summary>
         /// <remarks>
@@ -321,12 +314,30 @@ namespace Overworked.Interaction
         /// <summary>
         /// The station the current Interact press is aimed at, or null.
         /// </summary>
-        private NetworkObject _stationTarget;
+        private StationBase _stationTarget;
 
         /// <summary>
         /// When the current station press began.
         /// </summary>
         private float _stationPressTime;
+
+        /// <summary>
+        /// Something in front of a station that is waiting for the key to come up, or null.
+        /// </summary>
+        /// <remarks>
+        /// **A press in front of a machine has two possible meanings, and only the release can tell
+        /// them apart.** A tap takes the object; a hold uses the machine.
+        ///
+        /// The object cannot simply be asked for on the press, because by the release the press may
+        /// turn out to have been aimed at the machine — and a machine standing behind its own output
+        /// is then a machine that cannot be reached at all. That is not hypothetical: it is why
+        /// stamping a contract could not be done, since the contract has to be lying on the desk the
+        /// player is aiming at.
+        ///
+        /// Null everywhere except in front of a station. Away from machines a press takes what it is
+        /// aimed at, immediately and with no waiting, exactly as it always did.
+        /// </remarks>
+        private NetworkObject _deferredPickup;
 
         /// <summary>
         /// When the current Interact press began.
@@ -550,6 +561,24 @@ namespace Overworked.Interaction
                 return;
 
             NetworkObject best = FindBestPickup();
+            StationBase station = FindStationInFront();
+
+            /* **Both in front, so the release decides.** The instrument and the thing that uses it
+             * are in the same place, which is the ordinary arrangement of a desk — and picking the
+             * object up on the press would put the machine permanently out of reach. See
+             * _deferredPickup.
+             *
+             * Grabbing still keeps priority for a tap, which is the part of the old rule that
+             * mattered: a machine standing next to a table must not make everything on that table
+             * silently unpickable. It is only the hold that goes to the machine. */
+            if (best != null && station != null)
+            {
+                _deferredPickup = best;
+                _stationTarget = station;
+                _stationPressTime = Time.time;
+                return;
+            }
+
             if (best != null)
             {
                 _requested = best;
@@ -560,11 +589,8 @@ namespace Overworked.Interaction
                 return;
             }
 
-            /* Nothing to pick up, so the press belongs to whatever station is in front. Grabbing
-             * keeps priority on purpose: a machine standing next to a table would otherwise make
-             * everything on that table silently unpickable, and the player would have no way to
-             * tell why. */
-            _stationTarget = FindStationInFront();
+            /* Nothing to pick up, so the press can only belong to whatever station is in front. */
+            _stationTarget = station;
             if (_stationTarget != null)
                 _stationPressTime = Time.time;
         }
@@ -583,10 +609,37 @@ namespace Overworked.Interaction
             if (_interactAction == null || !_interactAction.WasReleasedThisFrame())
                 return;
 
-            bool longPress = (Time.time - _stationPressTime) >= _stationLongPressSeconds;
+            StationBase station = _stationTarget;
+            NetworkObject grabbable = _deferredPickup;
 
-            CmdInteractWith(_stationTarget, longPress);
             _stationTarget = null;
+            _deferredPickup = null;
+
+            /* Gone while the key was down — despawned, or taken by somebody else. There is nothing
+             * to ask for and nothing to use. */
+            if (station == null)
+                return;
+
+            float heldSeconds = Time.time - _stationPressTime;
+
+            /* **A tap takes the object; a hold uses the machine.** How long a hold is, is the
+             * machine's own business — see StationBase.HoldSeconds. That number is what makes a desk
+             * with a contract lying on it usable at all: without it the press would pick the
+             * contract up and the desk would never hear about it. */
+            if (grabbable != null && heldSeconds < station.HoldSeconds)
+            {
+                if (!grabbable.IsSpawned)
+                    return;
+
+                _requested = grabbable;
+                _requestPending = true;
+                _requestSentTime = Time.time;
+
+                CmdRequestPickup(grabbable);
+                return;
+            }
+
+            CmdInteractWith(station.NetworkObject, heldSeconds);
         }
 
         /// <summary>
@@ -599,7 +652,7 @@ namespace Overworked.Interaction
         /// pivot sits at the base of the table and a wide machine would otherwise be unreachable
         /// from the far end of its own frontage.
         /// </remarks>
-        private NetworkObject FindStationInFront()
+        private StationBase FindStationInFront()
         {
             Vector3 origin = transform.position;
 
@@ -612,7 +665,7 @@ namespace Overworked.Interaction
             int count = Physics.OverlapSphereNonAlloc(origin, _stationReach, _overlapBuffer, ~0, QueryTriggerInteraction.Ignore);
 
             float minDot = Mathf.Cos(_stationHalfAngle * Mathf.Deg2Rad);
-            NetworkObject best = null;
+            StationBase best = null;
             float bestDistance = float.MaxValue;
 
             for (int i = 0; i < count; i++)
@@ -637,7 +690,7 @@ namespace Overworked.Interaction
                     continue;
 
                 bestDistance = distance;
-                best = station.NetworkObject;
+                best = station;
             }
 
             return best;
@@ -1017,7 +1070,7 @@ namespace Overworked.Interaction
         /// the station, including whether the player's hands are in the right state for it.
         /// </remarks>
         [ServerRpc]
-        private void CmdInteractWith(NetworkObject stationObject, bool longPress, NetworkConnection caller = null)
+        private void CmdInteractWith(NetworkObject stationObject, float heldSeconds, NetworkConnection caller = null)
         {
             if (stationObject == null || caller == null || !caller.IsActive)
                 return;
@@ -1038,7 +1091,7 @@ namespace Overworked.Interaction
             if (to.sqrMagnitude > reach * reach)
                 return;
 
-            station.ServerInteract(this, caller, longPress);
+            station.ServerInteract(this, caller, heldSeconds);
         }
 
         /// <summary>

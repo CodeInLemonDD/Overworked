@@ -788,7 +788,7 @@ namespace Overworked.Stations
         /// Long presses are ignored: taking a sheet and taking a stack of them would read as the
         /// same gesture with two meanings, and nothing here needs a second verb.
         /// </remarks>
-        protected override void OnServerInteract(PlayerInteraction player, NetworkConnection conn, bool longPress)
+        protected override void OnServerInteract(PlayerInteraction player, NetworkConnection conn, float heldSeconds)
         {
             if (player == null || conn == null)
                 return;

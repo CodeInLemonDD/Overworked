@@ -1,6 +1,5 @@
 using System.Collections.Generic;
 using FishNet.Connection;
-using FishNet.Managing.Timing;
 using Overworked.Documents;
 using Overworked.Interaction;
 using UnityEngine;
@@ -19,10 +18,23 @@ namespace Overworked.Stations
     /// something. Anything that ate it would be a machine that takes a contract and returns a
     /// contract, which is a printer.
     ///
-    /// **So there is no press here, and there cannot be one.** E on a station is only reached when
-    /// there was nothing to pick up, so a player holding a contract can never press E on a desk —
-    /// see CONSTRAINTS.md, "进料型工位没有主动动词". The paper has to be put down, which is what
-    /// makes this read as stamping something rather than as using a machine.
+    /// **The one station you hold the key for.** Put the contract down on it — it is a table, and
+    /// the contract snaps to it like anything else left there — then stand at the desk and hold E
+    /// for a second. A tap takes the contract back, because that is what a tap means everywhere
+    /// else in the office; only the hold reaches the desk.
+    ///
+    /// **That distinction is the whole reason a station can state a hold time.** See
+    /// <see cref="StationBase.HoldSeconds"/> and <see cref="Interaction.PlayerInteraction"/>: at a
+    /// machine, a tap and a hold used to mean the same thing, and the machine was only reached when
+    /// there was nothing in front of it to pick up. A desk with a contract on it is exactly the case
+    /// that breaks — the thing you want to use and the thing you would pick up are in the same place.
+    ///
+    /// **It never had a verb before, and it does now.** The project's rule is that an intake station
+    /// has no active verb, because E while carrying goes to dropping rather than to the station — so
+    /// this was built the other way round, stamping whatever came to rest on it. That worked and was
+    /// wrong in the same breath: putting a contract down is not signing it, and a machine that signs
+    /// on its own takes the decision away from the player. What makes a press reachable here is not
+    /// the carrying rule changing, but the player having put the contract down first.
     ///
     /// **Blank means blank in both senses.** The printer leaves an unstamped sheet carrying no
     /// number, so what lies on the desk looks like what it is; this writes the number and the team
@@ -70,49 +82,56 @@ namespace Overworked.Stations
         private Vector3 _intakeHalfExtents = new(0.45f, 0.35f, 0.45f);
 
         /// <summary>
-        /// Reused by the scan, so a frame allocates nothing.
+        /// How long the press has to be held for the stamp to take, in seconds.
+        /// </summary>
+        /// <remarks>
+        /// **One second, and it is the only place in the game where the length of a press is the
+        /// mechanic.** Every other machine answers to a tap because the verb is unambiguous — take a
+        /// sheet, open the panel, hand over the folder. Stamping is the one action in the office
+        /// that is worth a moment's deliberate effort, and it is also the one that takes something
+        /// the player already made and changes it, so it should feel like a decision rather than
+        /// like brushing past a table.
+        ///
+        /// It is read on every peer, through <see cref="StationBase.HoldSeconds"/>, to decide whether
+        /// a press belongs to this desk or to the contract lying on it. See
+        /// <see cref="Interaction.PlayerInteraction"/>.
+        /// </remarks>
+        [Tooltip("Seconds the press must be held for the stamp to take.")]
+        [Min(0f)]
+        [SerializeField]
+        private float _stampSeconds = 1f;
+
+        /// <summary>
+        /// How long a press has to be held before this desk will take it rather than let the
+        /// contract lying on it be picked up.
+        /// </summary>
+        public override float HoldSeconds => _stampSeconds;
+
+        /// <summary>
+        /// Reused by the scan, so a press allocates nothing.
         /// </summary>
         private readonly List<NetworkGrabbable> _scanBuffer = new();
 
         /// <summary>
-        /// The TimeManager this object subscribed to.
-        /// </summary>
-        private TimeManager _timeManager;
-
-        public override void OnStartServer()
-        {
-            base.OnStartServer();
-
-            /* Subscribed by hand rather than through TickNetworkBehaviour, for the reason the
-             * printer and the scoreboard both give. There is no clock here — nothing about stamping
-             * takes time — so this is only the frame to look in the box on. */
-            _timeManager = TimeManager;
-            if (_timeManager != null)
-                _timeManager.OnUpdate += ServerUpdate;
-        }
-
-        public override void OnStopServer()
-        {
-            if (_timeManager != null)
-            {
-                _timeManager.OnUpdate -= ServerUpdate;
-                _timeManager = null;
-            }
-
-            base.OnStopServer();
-        }
-
-        /// <summary>
-        /// Server: stamps whatever is lying on the desk.
+        /// Server: stamps everything lying on the desk.
         /// </summary>
         /// <remarks>
-        /// A sheet that is only passing through gets stamped too — it is inside the box for a frame
-        /// or two on its way past, and being thrown at the stamp is as clear an intent as being laid
-        /// on it. Narrowing the test to objects that have come to rest would be a rule about intent
-        /// that the box is already expressing.
+        /// **Driven by a press, not by a clock.** It used to run every frame and stamp whatever
+        /// turned up in its box, which worked and was wrong: putting a contract down is not the same
+        /// act as signing it, and a machine that does the second one on its own takes the decision
+        /// away from the player. See <see cref="_stampSeconds"/>.
+        ///
+        /// The length is checked here as well as on the client that sent it, because the client's
+        /// answer is not evidence — see <see cref="StationBase.ServerInteract"/>. Too short is
+        /// answered with nothing at all: no refusal, no message. Stamping is never urgent, and the
+        /// player is still holding the key down, so a complaint would arrive in the middle of them
+        /// doing it correctly.
         /// </remarks>
-        private void ServerUpdate()
+        protected override void OnServerInteract(PlayerInteraction player, NetworkConnection conn, float heldSeconds)
         {
+            if (heldSeconds < _stampSeconds)
+                return;
+
             IntakeVolume.CollectInside(NetworkManager, transform, _intakeCentre, _intakeHalfExtents, _scanBuffer);
 
             for (int i = 0; i < _scanBuffer.Count; i++)
@@ -146,19 +165,6 @@ namespace Overworked.Stations
 
             grabbable.ServerSetVariant(record.Number, record.Team);
             grabbable.ServerSetStamped(true);
-        }
-
-        /// <summary>
-        /// Does nothing, and that is the design rather than an omission.
-        /// </summary>
-        /// <remarks>
-        /// A press only reaches a station when there was nothing in reach to pick up, so a player
-        /// carrying a contract cannot press this at all — and a player who is not carrying one has
-        /// nothing to stamp. What E does at a desk is pick up whatever is lying on it, which is the
-        /// sheet they just stamped. See the class remarks.
-        /// </remarks>
-        protected override void OnServerInteract(PlayerInteraction player, NetworkConnection conn, bool longPress)
-        {
         }
 
         private void OnDrawGizmosSelected()

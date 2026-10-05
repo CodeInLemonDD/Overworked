@@ -798,7 +798,7 @@ namespace Overworked.Npc
         /// server's own copy of the player and never from anything the client sent — a client that
         /// could name its own team could take a job as the other side and hand it to itself.
         /// </remarks>
-        protected override void OnServerInteract(PlayerInteraction player, NetworkConnection conn, bool longPress)
+        protected override void OnServerInteract(PlayerInteraction player, NetworkConnection conn, float heldSeconds)
         {
             if (player == null)
                 return;
