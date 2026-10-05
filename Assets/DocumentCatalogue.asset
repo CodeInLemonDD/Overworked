@@ -16,16 +16,20 @@ MonoBehaviour:
   - DisplayName: "\u5408\u540C"
     PayloadIndex: 2
     Source: 0
+    NeedsStamp: 1
     FetchSeconds: 0
   - DisplayName: Excel
     PayloadIndex: 2
     Source: 0
+    NeedsStamp: 0
     FetchSeconds: 0
   - DisplayName: "\u56FE\u7247"
     PayloadIndex: 2
     Source: 1
+    NeedsStamp: 0
     FetchSeconds: 4
   - DisplayName: "\u6587\u6863"
     PayloadIndex: 2
     Source: 1
+    NeedsStamp: 0
     FetchSeconds: 5
