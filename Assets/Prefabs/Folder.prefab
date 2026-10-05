@@ -121,6 +121,7 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 6512861060711581202}
+  - component: {fileID: 4502472702664967679}
   m_Layer: 0
   m_Name: Folder
   m_TagString: Untagged
@@ -147,6 +148,26 @@ Transform:
   - {fileID: 703062635414980665}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &4502472702664967679
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 5926886556397169583}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 946efe6310d4f954791c4aa20a213599, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Overworked.Containers.PayloadLabel
+  _texts: []
+  _tinted:
+  - {fileID: 6266620529266972303}
+  - {fileID: 1024060804342133895}
+  _colourProperty: _BaseColor
+  _teamColours:
+  - {r: 0.604, g: 0.185, b: 0.051, a: 1}
+  - {r: 0.046, g: 0.323, b: 0.509, a: 1}
 --- !u!1 &6041637784838750531
 GameObject:
   m_ObjectHideFlags: 0
