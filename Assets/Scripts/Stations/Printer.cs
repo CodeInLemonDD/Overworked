@@ -836,15 +836,23 @@ namespace Overworked.Stations
             }
 
             /* Spawn before removing, so the failure above and any other one costs the machine a
-             * sheet rather than the player one. */
+             * sheet rather than the player one.
+             *
+             * **An unsigned sheet comes out blank.** A contract that has to be stamped says nothing
+             * until it is: no number, which is the whole of what makes it read as an empty one
+             * rather than as somebody else's finished work. The number is not lost — it is in the
+             * record, and the stamp desk is what writes it on. See StampDesk. */
+            bool stamped = !spec.NeedsStamp;
+
             NetworkObject nob = GrabbableSpawner.SpawnGrabbable(
                 spec.PayloadIndex,
                 player.HandPosition,
                 Quaternion.identity,
                 conn,
-                document.Number,
+                stamped ? document.Number : -1,
                 document.Team,
-                entry.DataId);
+                entry.DataId,
+                stamped);
 
             if (nob == null)
                 return;

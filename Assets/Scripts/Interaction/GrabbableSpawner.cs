@@ -178,7 +178,8 @@ namespace Overworked.Interaction
             NetworkConnection owner = null,
             int variantNumber = -1,
             int variantTeam = -1,
-            int dataId = -1)
+            int dataId = -1,
+            bool stamped = true)
         {
             GrabbableSpawner spawner = Instance;
             if (spawner == null || spawner._objectPrefab == null)
@@ -198,7 +199,7 @@ namespace Overworked.Interaction
             NetworkGrabbable grabbable = nob.GetComponent<NetworkGrabbable>();
             if (grabbable != null)
             {
-                /* All three go on before the spawn, not after. SyncVar.OnChange does not fire for
+                /* All four go on before the spawn, not after. SyncVar.OnChange does not fire for
                  * an initial value, so a value set afterwards arrives as a change — which means the
                  * object appears first as the bare template and then corrects itself, and a
                  * payload swap in between would re-measure the geometry and move the transform.
@@ -206,9 +207,14 @@ namespace Overworked.Interaction
                  * That matters most for the id: it is the one part of a document's identity that
                  * nothing draws, so a late write is invisible right up until something reads it —
                  * and the thing that will is a container, which would write the object down as an
-                 * unnamed entity and drop its number. Keeping all three here rather than at each
+                 * unnamed entity and drop its number. Keeping all four here rather than at each
                  * call site is what makes "a spawned object is fully itself" an invariant of this
-                 * method instead of a rule every caller has to remember. */
+                 * method instead of a rule every caller has to remember.
+                 *
+                 * The stamp is written unconditionally rather than only when it is false. It is one
+                 * local field write, and the alternative reads "usually correct, except on an
+                 * instance that was pooled while blank" — a thing that is true today and would stop
+                 * being true the day anything spawns from a pool. */
                 if (payloadIndex >= 0)
                     grabbable.ServerSetPayload(payloadIndex);
 
@@ -217,6 +223,8 @@ namespace Overworked.Interaction
 
                 if (dataId >= 0)
                     grabbable.ServerSetDataId(dataId);
+
+                grabbable.ServerSetStamped(stamped);
             }
 
             manager.ServerManager.Spawn(nob, owner);

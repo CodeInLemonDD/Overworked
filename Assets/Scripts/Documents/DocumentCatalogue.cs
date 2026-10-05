@@ -56,8 +56,26 @@ namespace Overworked.Documents
             /// <summary>
             /// A <see cref="DocumentSource"/>, kept as an int.
             /// </summary>
-            [Tooltip("0 = the company's own files, 1 = fetched over the Internet.")]
+            [Tooltip("0 = the company's own files, 1 = fetched over the Internet, 2 = somebody else has it.")]
             public int Source;
+
+            /// <summary>
+            /// Whether a sheet of this kind is worthless until it has been stamped.
+            /// </summary>
+            /// <remarks>
+            /// **This is a flag on the kind rather than a second kind.** A contract and a contract
+            /// with a stamp on it are the same document — same record, same number, same team — and
+            /// the stamp is a state that one sheet is in, not a different thing to be. Modelling it
+            /// as a second spec would mean two catalogue rows that have to be kept in step, and a
+            /// delivery rule that has to know which of the two to look for.
+            ///
+            /// What the flag buys is that the stamp stops being a rule anybody has to remember:
+            /// the printer is what sets a sheet's stamped flag, from this, at the moment it makes
+            /// one, and everything downstream reads the flag on the sheet rather than looking the
+            /// kind up again. See <see cref="Interaction.NetworkGrabbable.IsStamped"/>.
+            /// </remarks>
+            [Tooltip("Tick for a kind that is worthless until it has been stamped, such as a contract.")]
+            public bool NeedsStamp;
 
             /// <summary>
             /// How long this takes to obtain, in seconds.

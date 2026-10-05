@@ -170,6 +170,28 @@ namespace Overworked.Interaction
         private readonly SyncVar<int> _dataId = new(-1);
 
         /// <summary>
+        /// Whether this sheet is finished paperwork, or a blank waiting to be stamped.
+        /// Replicated.
+        /// </summary>
+        /// <remarks>
+        /// **True is the default, and true means "nothing to do here".** Everything that is not a
+        /// contract worth stamping — a ream of paper, an ink cartridge, a folder, a report — is
+        /// stamped by virtue of not being the kind of thing a stamp is for. The alternative would be
+        /// a flag that has to be remembered on every spawn path in the project, and the one that got
+        /// forgotten would make a delivery quietly impossible.
+        ///
+        /// **A fact about this sheet, not about the document it is.** Printing the same document
+        /// three times makes three sheets, and stamping one of them leaves the other two as blank as
+        /// they were. Putting it on the record instead would have the stamp apply to copies lying
+        /// somewhere else, which is not what a stamp is.
+        ///
+        /// An unstamped sheet is refused by folders, and that is the whole of the rule: an unsigned
+        /// contract cannot be delivered because it cannot be filed, and nothing had to be told that
+        /// separately. See <see cref="FolderIntake"/>.
+        /// </remarks>
+        private readonly SyncVar<bool> _stamped = new(true);
+
+        /// <summary>
         /// The payload instance currently attached, or null.
         /// </summary>
         /// <remarks>
@@ -239,6 +261,11 @@ namespace Overworked.Interaction
         /// Which document this object is, or -1 when it is not one.
         /// </summary>
         public int DataId => _dataId.Value;
+
+        /// <summary>
+        /// Whether this sheet has been stamped, or is the kind of thing that is never stamped.
+        /// </summary>
+        public bool IsStamped => _stamped.Value;
 
         /// <summary>
         /// True when this object is something documents can be put into.
@@ -380,6 +407,30 @@ namespace Overworked.Interaction
             }
 
             _dataId.Value = dataId;
+        }
+
+        /// <summary>
+        /// Server: says whether this sheet still needs stamping.
+        /// </summary>
+        /// <remarks>
+        /// The printer is what clears it, from the kind's
+        /// <see cref="Documents.DocumentCatalogue.Spec.NeedsStamp"/>, at the moment it makes a
+        /// sheet; the stamp desk is what sets it. Nothing subscribes to the change — the desk writes
+        /// the number at the same instant, and the number is what a label catches up on.
+        ///
+        /// Nothing here is marked [Server], matching the other setters: they are called between
+        /// pooling an object and spawning it, which is before the guard a [Server] attribute would
+        /// insert could pass.
+        /// </remarks>
+        public void ServerSetStamped(bool stamped)
+        {
+            if (!FishNet.InstanceFinder.IsServerStarted)
+            {
+                Debug.LogWarning($"{nameof(ServerSetStamped)} was called on a peer that is not the server; ignored.", this);
+                return;
+            }
+
+            _stamped.Value = stamped;
         }
 
         /// <summary>

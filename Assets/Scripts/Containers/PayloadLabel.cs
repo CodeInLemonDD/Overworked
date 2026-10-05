@@ -95,7 +95,10 @@ namespace Overworked.Containers
         /// <summary>
         /// Writes the number and tints whatever is there to tint.
         /// </summary>
-        /// <param name="number">The document's number, or -1 to leave the text as authored.</param>
+        /// <param name="number">
+        /// The document's number, or -1 for a sheet that has none to show — a contract that has not
+        /// been stamped yet, which is blank until it is.
+        /// </param>
         /// <param name="team">The document's team, or -1 to leave the colour as authored.</param>
         public void SetVariant(int number, int team)
         {
@@ -106,7 +109,15 @@ namespace Overworked.Containers
             bool tint = _teamColours != null && team >= 0 && team < _teamColours.Length;
 
             Color colour = tint ? _teamColours[team] : default;
-            string text = number >= 0 ? number.ToString() : null;
+
+            /* **No number clears the text rather than leaving it alone.** This used to treat -1 as
+             * "as authored", which is the right reading for a payload that does not use numbers —
+             * except that such a payload has no component of this type at all, so the case cannot
+             * arise. What -1 actually means on a payload that does have one is "there is nothing to
+             * write here", and the two readings only look alike until the first kind of document
+             * that starts life blank: an unstamped contract came out showing the placeholder the
+             * prefab was authored with, which is a number that belongs to nobody. */
+            string text = number >= 0 ? number.ToString() : string.Empty;
 
             if (_texts != null)
             {
@@ -115,8 +126,7 @@ namespace Overworked.Containers
                     if (label == null)
                         continue;
 
-                    if (text != null)
-                        label.text = text;
+                    label.text = text;
 
                     if (tint)
                         label.color = colour;

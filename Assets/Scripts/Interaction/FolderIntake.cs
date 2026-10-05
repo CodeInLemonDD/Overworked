@@ -187,6 +187,16 @@ namespace Overworked.Interaction
             if (dataId < 0)
                 return false;
 
+            /* **Blank paperwork is not paperwork.** A sheet that has not been stamped is refused
+             * here, and this one line is the whole of the rule — an unsigned contract cannot be
+             * delivered because it cannot be filed, so <see cref="Npc.Customer"/>'s delivery check
+             * never had to learn what a stamp is.
+             *
+             * Refusing is also the direction that can be undone: the sheet stays in the world and
+             * its owner carries it to a stamp desk. Anything filed is gone for good. */
+            if (!grabbable.IsStamped)
+                return false;
+
             DocumentStore store = DocumentStore.Instance;
             if (store == null || !store.TryGet(dataId, out DocumentRecord record))
                 return false;
