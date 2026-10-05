@@ -53,11 +53,29 @@ namespace Overworked.Player
         private float _staminaCap = 100f;
 
         /// <summary>
-        /// 体力 spent per second while a movement direction is held.
+        /// 体力 spent per second while the character is actually travelling.
         /// </summary>
-        [Tooltip("体力 spent per second while a movement direction is held.")]
+        /// <remarks>
+        /// While travelling, not while a direction is held — see <see cref="IsMoving"/> for why
+        /// those stopped being the same thing.
+        /// </remarks>
+        [Tooltip("体力 spent per second while the character is actually moving.")]
         [SerializeField]
         private float _drainPerSecond = 12f;
+
+        /// <summary>
+        /// How fast the character has to be travelling to count as moving, in units per second.
+        /// </summary>
+        /// <remarks>
+        /// Well below the slowest a player can really walk. Exhaustion takes the move rate down to
+        /// <see cref="MinSpeedMultiplier"/> of four units a second, so the slowest genuine walk is
+        /// about 1.2 — and this is a threshold for telling movement from the jitter of a controller
+        /// resting on a floor, not for judging whether somebody is going fast enough.
+        /// </remarks>
+        [Tooltip("How fast the character has to be travelling, in units per second, to count as moving.")]
+        [Min(0f)]
+        [SerializeField]
+        private float _movingSpeed = 0.5f;
 
         /// <summary>
         /// Seconds of standing still before the bar returns to the cap.
@@ -142,6 +160,21 @@ namespace Overworked.Player
         /// </summary>
         private float _speedMultiplier = 1f;
 
+        /// <summary>
+        /// Where the character was at the end of the previous frame.
+        /// </summary>
+        private Vector3 _lastPosition;
+
+        /// <summary>
+        /// Whether <see cref="_lastPosition"/> has ever been written.
+        /// </summary>
+        /// <remarks>
+        /// Separate from the position itself, because the origin is a perfectly good place for a
+        /// character to be standing and a field test cannot tell "has not run yet" from "is
+        /// standing on the origin".
+        /// </remarks>
+        private bool _hasLastPosition;
+
         private void Awake()
         {
             /* Once a frame, and — under TimeManager's default order — ahead of the tick, so
@@ -163,6 +196,7 @@ namespace Overworked.Player
             _stamina = _staminaCap;
             _idleSeconds = 0f;
             _speedMultiplier = 1f;
+            _hasLastPosition = false;
 
             if (_inputActions == null)
             {
@@ -264,10 +298,17 @@ namespace Overworked.Player
              * quantity, so it should freeze along with the game rather than keep draining
              * behind a pause. */
             float deltaTime = Time.deltaTime;
+
+            /* Sampled before the frame-time guard, and sampled every frame regardless of the
+             * answer. A frame of zero length can still have had a tick in it, and skipping the
+             * sample would leave the reference position behind — so the next frame would measure
+             * two frames of travel and read as a sprint. */
+            bool moving = IsMoving(deltaTime);
+
             if (deltaTime <= 0f)
                 return;
 
-            if (IsMoving())
+            if (moving)
             {
                 /* Standing still is the only thing that recovers stamina, so any movement
                  * input at all restarts the wait rather than merely pausing it. */
@@ -288,21 +329,64 @@ namespace Overworked.Player
         }
 
         /// <summary>
-        /// True while a movement direction is held.
+        /// True while the character is being walked somewhere.
         /// </summary>
         /// <remarks>
-        /// Same action and same threshold as <see cref="PlayerMovementPrediction"/>: anything
-        /// above it is full-speed movement there, so anything above it costs stamina here.
-        /// Holding a direction against a wall still counts — the player is pushing, not
-        /// resting, and rewarding them for leaning on geometry would turn the bar into a
-        /// button-mashing puzzle.
+        /// **A direction has to be held, and the character has to have got somewhere.** Both, and
+        /// the second one is the correction.
+        ///
+        /// This used to be the input alone, on the argument that a player pushing against geometry
+        /// is pushing rather than resting, and that rewarding them for leaning on a wall would turn
+        /// the bar into a button-mashing puzzle. The argument does not survive the question it was
+        /// answering: standing against a wall and standing in the open are worth exactly the same,
+        /// so there was nothing to discourage — while the cost was a bar that emptied for a reason
+        /// the player could not see. Holding a direction into a desk for a few seconds is a thing
+        /// that happens constantly in an office, and it read as the game losing track of itself.
+        /// The old rule was right about one thing, and "you are not moving, so you are recovering"
+        /// answers it better than the rule it replaces: the bar still never becomes a puzzle about
+        /// when it is safe to lean on something.
+        ///
+        /// **The input half is kept** rather than measuring displacement alone, because the two are
+        /// not the same fact in the other direction either. A player shoved by a thrown object, or
+        /// sliding to a halt, is moving without spending anything — the bar measures effort, not
+        /// distance travelled. It is also what stops a teleport from reading as a sprint, since
+        /// nothing holds a direction while the server moves somebody.
+        ///
+        /// Same action and same threshold as <see cref="PlayerMovementPrediction"/>: anything above
+        /// it is full-speed movement there, so anything above it is a candidate here.
+        ///
+        /// **Position, not <c>CharacterController.velocity</c>.** That value is worked out inside
+        /// <c>Move</c> from its own idea of how long a tick was, and a frame can contain none or
+        /// several — so it cannot be trusted to describe a frame. The transform is what
+        /// reconciliation writes to and what the player sees, which makes it the only honest
+        /// answer to "did we get anywhere".
+        ///
+        /// Height is dropped before measuring. Falling, landing and the controller's ground
+        /// snapping all move the transform vertically, and none of them is walking.
         /// </remarks>
-        private bool IsMoving()
+        private bool IsMoving(float deltaTime)
         {
-            if (_moveAction == null)
+            Vector3 position = transform.position;
+            Vector3 step = position - _lastPosition;
+            _lastPosition = position;
+
+            /* The first frame has nothing to compare against, and a character is not required to
+             * have started at the origin — see _hasLastPosition. */
+            if (!_hasLastPosition)
+            {
+                _hasLastPosition = true;
+                return false;
+            }
+
+            if (_moveAction == null || deltaTime <= 0f)
                 return false;
 
-            return _moveAction.ReadValue<Vector2>().sqrMagnitude > 0.0001f;
+            if (_moveAction.ReadValue<Vector2>().sqrMagnitude <= 0.0001f)
+                return false;
+
+            step.y = 0f;
+
+            return step.magnitude >= _movingSpeed * deltaTime;
         }
 
         /// <summary>
