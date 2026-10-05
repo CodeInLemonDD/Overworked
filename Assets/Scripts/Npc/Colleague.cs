@@ -188,6 +188,9 @@ namespace Overworked.Npc
                 return;
             }
 
+            if (!WantsSomethingObtainable(store))
+                return;
+
             int teamCount = Mathf.Max(1, scores.TeamCount);
 
             _rows.Clear();
@@ -214,6 +217,41 @@ namespace Overworked.Npc
             }
 
             ServerAssign(requestId);
+        }
+
+        /// <summary>
+        /// Server: false when the authored ask includes something only a trade can produce.
+        /// </summary>
+        /// <remarks>
+        /// **A colleague who asks for a trade-only kind can never be paid, and nothing says so.**
+        /// Taking his job grants what the request names minus exactly the kinds whose source is
+        /// <see cref="DocumentSource.Trade"/> — so asking for one of those is asking for the one
+        /// thing he is the only source of, and the exchange can never close. It is the same shape
+        /// as agreeing to swap a spreadsheet for a spreadsheet: the offer goes up, a team does the
+        /// work, and the delivery is refused for a reason nothing on screen explains.
+        ///
+        /// Reported rather than refused quietly, and checked here rather than in the catalogue,
+        /// because it is not a mistake about one kind — it is a mistake about this colleague's ask,
+        /// and it is the ask that has to change.
+        /// </remarks>
+        private bool WantsSomethingObtainable(DocumentStore store)
+        {
+            for (int i = 0; i < _wants.Length; i++)
+            {
+                if (!store.TryGetSpecAt(_wants[i].SpecIndex, out DocumentCatalogue.Spec spec))
+                    continue;
+
+                if (spec.Source != (int)DocumentSource.Trade)
+                    continue;
+
+                ReportOnce(
+                    $"his ask includes '{spec.DisplayName}', which is a trade-only kind. Taking his job would not grant " +
+                    "it, so the exchange could never be completed. Ask for something the office can obtain by itself");
+
+                return false;
+            }
+
+            return true;
         }
 
         /// <summary>
