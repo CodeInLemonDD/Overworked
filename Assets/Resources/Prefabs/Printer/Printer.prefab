@@ -1652,7 +1652,7 @@ MonoBehaviour:
   _teleportThreshold: 1
   <PrefabId>k__BackingField: 65535
   <SpawnableCollectionId>k__BackingField: 0
-  <AssetPathHash>k__BackingField: 14904760400812764131
+  <AssetPathHash>k__BackingField: 13365941703008796192
   SceneId: 0
   SerializedTransformProperties:
     Position: {x: 0, y: 0, z: 0}
@@ -1705,6 +1705,7 @@ MonoBehaviour:
   _addedNetworkObject: {fileID: 8548796235865975724}
   _networkObjectCache: {fileID: 0}
   _interactReach: 2.5
+  _holdSeconds: 0.3
   _paper: {fileID: 5224336547291598814}
   _ink: {fileID: 7203218370221292147}
   _output: {fileID: 7480676152015603910}

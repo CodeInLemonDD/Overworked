@@ -10,6 +10,7 @@ GameObject:
   m_Component:
   - component: {fileID: 3514853907048830544}
   - component: {fileID: 6150148354197620712}
+  - component: {fileID: 9216184658408744125}
   m_Layer: 0
   m_Name: Table
   m_TagString: Untagged
@@ -50,6 +51,19 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::Overworked.Interaction.SnapSurface
   _minSurfaceNormalY: 0.9
   _raycastDistance: 3
+  _acceptsObjects: 1
+--- !u!114 &9216184658408744125
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3600208125488356902}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: a22092b7c51752048a517ae38bf42045, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Overworked.Match.TablePiece
 --- !u!1 &5605076974892930104
 GameObject:
   m_ObjectHideFlags: 0
