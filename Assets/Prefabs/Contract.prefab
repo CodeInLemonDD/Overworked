@@ -50,6 +50,8 @@ MonoBehaviour:
   _texts:
   - {fileID: 8185765512100075342}
   - {fileID: 8592174135676154304}
+  _tinted: []
+  _colourProperty: _BaseColor
   _teamColours:
   - {r: 0.6037736, g: 0.1852055, b: 0.0512637, a: 1}
   - {r: 0.046457764, g: 0.32326365, b: 0.509434, a: 1}
