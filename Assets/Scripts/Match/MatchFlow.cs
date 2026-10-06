@@ -329,7 +329,12 @@ namespace Overworked.Match
         /// Server: takes everything that belonged to the round back out of the office.
         /// </summary>
         /// <remarks>
-        /// Four steps, and the first one has to be first.
+        /// Six steps, and the first one has to be first.
+        ///
+        /// **The match-making is stopped before anything is taken apart.** A starter that was still
+        /// departing would not look at the zones again, and one still counting down would begin a
+        /// round in the middle of this. Neither is a state to leave the scene in while it is being
+        /// dismantled underneath them.
         ///
         /// **Loose objects go before the stations are asked to put themselves back.** Every
         /// grabbable in the world carries a folder container, which means a sweep for containers
@@ -337,14 +342,23 @@ namespace Overworked.Match
         /// stops being a trap once the grabbables are gone, because then the only containers left
         /// *are* the machines'. So: destroy the world's loose things, and what remains is the office.
         ///
+        /// **The office is put back the way it was authored**, which is the one arrangement every
+        /// later round measures its staging from — see <see cref="OfficeLayout.ServerReset"/>. It
+        /// goes after the stations have been asked to reset their own state, because it moves them
+        /// and a station being moved is not a station mid-reset.
+        ///
         /// **Documents go last** for the mirror-image reason. A document id is valid until the store
         /// forgets it, and four other things hold ids — the request rows, the unlock list, a
         /// printer's queue and the data id on an object in somebody's hands. The store is what turns
         /// an id into something, so forgetting them is safe only once nothing else is still holding
-        /// one, and the three steps above are exactly the things that do.
+        /// one, and the steps above are exactly the things that do.
         /// </remarks>
         private void ClearWorld()
         {
+            /* First, so that nothing is still watching for people to stand in zones or waiting on a
+             * deployment while the room is taken apart. */
+            MatchStarter.Instance?.ServerReset();
+
             /* Hands too, not just the floor. An object being carried is still an object from the
              * last round, and leaving it would start the next one with somebody already holding a
              * finished delivery. Despawning it out of their hands is safe: the player notices the
@@ -364,6 +378,8 @@ namespace Overworked.Match
                 if (stations[i] != null)
                     stations[i].ServerReset();
             }
+
+            OfficeLayout.Instance?.ServerReset();
 
             RequestBoard.Instance?.ServerClear();
             DocumentUnlocks.Instance?.ServerResetUnlocks();

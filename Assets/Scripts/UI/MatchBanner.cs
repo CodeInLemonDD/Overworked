@@ -208,13 +208,30 @@ namespace Overworked.UI
         /// The object is toggled rather than the text emptied, so that a countdown that has not
         /// started yet leaves nothing on screen at all. An empty big text still reserves its own
         /// height and would shift the side line around for the first seconds of every session.
+        ///
+        /// **It shows the deployment's number as well as the elevator's.** They are two different
+        /// clocks and the same question — "how long until I can do something" — so they get the same
+        /// slot. See the body.
         /// </remarks>
         private void RefreshCountdown()
         {
             MatchStarter starter = MatchStarter.Instance;
+            OfficeLayout layout = OfficeLayout.Instance;
 
-            bool running = starter != null && starter.IsCountingDown;
-            int remaining = running ? starter.CountdownRemaining : 0;
+            /* **Two countdowns share this slot, and they are never both up.** The elevator one runs
+             * while sides are being picked; the deployment one runs after the handoff, while the
+             * office is being lowered into place. Both are "wait for this number", which is why they
+             * are the same big text in the same place rather than two things that have to be told
+             * apart — see the class remarks on the middle of the screen carrying one thing at a
+             * time. */
+            bool departing = starter != null && starter.IsDeparting;
+            bool running = departing || (starter != null && starter.IsCountingDown);
+
+            int remaining;
+            if (departing)
+                remaining = layout != null ? layout.RemainingSeconds : 0;
+            else
+                remaining = running ? starter.CountdownRemaining : 0;
 
             if (running != _countdownShown)
             {

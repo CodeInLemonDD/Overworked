@@ -2,6 +2,7 @@ using FishNet.Connection;
 using FishNet.Object.Prediction;
 using FishNet.Transporting;
 using FishNet.Utility.Template;
+using Overworked.Match;
 using UnityEngine;
 using UnityEngine.InputSystem;
 
@@ -310,6 +311,19 @@ namespace Overworked.Player
 
             // Sampled on the tick, not per-frame: replicate is tick driven.
             Vector2 move = _moveAction != null ? _moveAction.ReadValue<Vector2>() : Vector2.zero;
+
+            /* **The office is being set up, so nobody walks.** Zeroed here rather than by disabling
+             * the input action or switching this component off, because this is the one place the
+             * decision travels: whatever leaves here is what the server simulates, so a frozen
+             * player is frozen on every machine rather than only on their own. Switching the
+             * component off would also stop the reconcile, which would leave them able to drift.
+             *
+             * Zero input still lets gravity run inside the replicate, which is what keeps them
+             * standing on the floor rather than hovering while they wait. And it costs no stamina:
+             * PlayerStamina measures displacement and not key presses, which is the same rule that
+             * stops a player walking into a wall from tiring themselves out. */
+            if (OfficeLayout.MovementIsFrozen)
+                move = Vector2.zero;
 
             /* Sampled on the tick as well, and for the same reason: the value that goes out
              * has to be the one that belongs to this tick, not one read back later during a

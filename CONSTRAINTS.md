@@ -56,6 +56,7 @@
 | 16 | **`TargetRpc` 的第一个参数必须是 `NetworkConnection`** —— 编织期**硬错误**,不是警告:`Target RPC xxx must have a NetworkConnection as the first parameter.`。`ServerRpc` 的连接参数则是**可选的**,并且按惯例放最后 | `CodeGenerating/Processing/Rpc/Attributes.cs:120-128` |
 | 17 | **RPC 方法三条通用限制**:不能有泛型参数、不能是 `abstract`、必须返回 `void`。同样是编织期报错 —— 这也是 `StationBase` 要「具体方法挂 `[Server]`、抽象方法当扩展点」的另一半原因 | `CodeGenerating/Processing/Rpc/Attributes.cs:97-116` |
 | 18 | **`[TargetRpc, ObserversRpc]` 可以叠加在同一个方法上,`ServerRpc` 不能和任何 RPC 组合** | `CodeGenerating/Processing/Rpc/Attributes.cs:71` |
+| 19 | **`FindObjectsByType` 不保证各端返回顺序一致。** 凡是**按索引**用这个结果的地方(洗牌、配对、取第 N 个)都会在不同客户端上算出不同结果 —— 而且**什么都不报**:种子是对的、日志是对的、每台机器自己看也合理,只有**两台机器的世界不一样**。**先按一个各端一致的键排序。** 场景物体用作者摆的坐标;运行时生成的东西要用别的稳定键(生成序号、owner id) | `OfficeLayout.CaptureStations` / `CaptureAnchors` |
 
 > **注意 `Attributes.cs` 有七个同名文件。** 上面第 4 条引的 `Attributes.cs:45-55` 指的是
 > `Runtime/Object/NetworkBehaviour/Attributes.cs`(属性定义),而 16–18 条引的是
@@ -71,6 +72,7 @@
 | C | 自建 HUD 必须 `sortingOrder >= 1`、**不挂 `GraphicRaycaster`**、所有 graphic `raycastTarget = false`,否则会吃掉 FishNet demo 左上角 Host/Client 按钮的点击 —— MPPM 测试就靠它们 |
 | D | 场景与 prefab 是 YAML,**无法合并**。只能有一个窗口碰,其余由用户手工操作 |
 | E | **`OnGUI` 收不到键盘输入。** 新输入系统**不能给 IMGUI 喂事件**(`KnownLimitations.md`:"The Input System cannot generate input for IMGUI"),而本项目是 `activeInputHandler: 1`(独占)。所以 **`GUI.TextField` 画得出来,但一个字符也收不到**。**绘制不受影响** —— 界面照旧用 `OnGUI` 画,字符改从 `Keyboard.current.onTextInput` 收。见 `Dev/DevConsole.cs` |
+| F | **没有 `NetworkObject` 的东西不要联网同步 —— 让每个端按种子自己生成。** 位置一个字节都不过网:只要各端拿到的**种子和输入一致**,算出来的结果就一致。桌子(`Table.prefab`)和区域锚点都是这么做的,代价是**必须保证确定性** —— 见硬约束 19。反过来:**别给一个纯装饰物体挂 `NetworkObject`**,那会把它变成一个真有生命周期的联网对象,而它只是家具 |
 
 ---
 

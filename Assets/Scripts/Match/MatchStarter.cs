@@ -67,6 +67,19 @@ namespace Overworked.Match
         private readonly SyncVar<bool> _counting = new(false);
 
         /// <summary>
+        /// The players have been sent to their sides and the office is being set up. Replicated.
+        /// </summary>
+        /// <remarks>
+        /// **A latch, and it has to exist.** Everything below this point in <see cref="ServerUpdate"/>
+        /// asks where the players are standing, and the answer after the handoff is "on their side's
+        /// spawn point, in the middle of the office, in no zone at all" — which reads exactly like
+        /// nobody having picked a side. Without this the very next poll would cancel the countdown
+        /// and the round could never begin. It is cleared when the deployment is over, and by
+        /// <see cref="ServerReset"/>.
+        /// </remarks>
+        private readonly SyncVar<bool> _departing = new(false);
+
+        /// <summary>
         /// Whole seconds left on the countdown. Replicated.
         /// </summary>
         /// <remarks>
@@ -139,6 +152,18 @@ namespace Overworked.Match
         /// </summary>
         public int CountdownRemaining => IsServerInitialized ? Mathf.CeilToInt(_exactCountdown) : _countdown.Value;
 
+        /// <summary>
+        /// The sides have been picked, the players are on them, and the office is being set up.
+        /// </summary>
+        /// <remarks>
+        /// The seam the transition hangs on: it goes true at the moment the players are moved, which
+        /// is the moment the screen should start going dark, and stays true until the office is
+        /// standing and the round proper begins. **A client reads this to know that it has been
+        /// moved**, which is otherwise remarkably hard to tell — a teleport from one part of one
+        /// scene to another part of the same scene is a position that changed, and nothing more.
+        /// </remarks>
+        public bool IsDeparting => _departing.Value;
+
         public override void OnStartNetwork()
         {
             base.OnStartNetwork();
@@ -164,6 +189,16 @@ namespace Overworked.Match
         public override void OnStartServer()
         {
             base.OnStartServer();
+
+            /* A SyncVar on a scene NetworkObject is the same component next session, so a session
+             * stopped mid-countdown would come back with the number still on screen and the round
+             * starting on its own. The same trap the scoreboard, the flow and the layout each have,
+             * and the same fix. */
+            _counting.Value = false;
+            _countdown.Value = 0;
+            _exactCountdown = 0f;
+            _timer = 0f;
+            _departing.Value = false;
 
             /* Subscribed by hand rather than through TickNetworkBehaviour, for the reason the
              * scoreboard and the printer both give: OnTick runs two or three times a frame and may
@@ -201,10 +236,22 @@ namespace Overworked.Match
         {
             ScoreBoard scores = ScoreBoard.Instance;
 
+            if (scores == null)
+                return;
+
+            /* Past the handoff, nothing below this is about zones any more. The players are standing
+             * on their side's spawn point in the middle of the office, which every question this
+             * method used to ask would read as "nobody has picked a side". */
+            if (_departing.Value)
+            {
+                WaitForDeployment(scores);
+                return;
+            }
+
             /* Nothing to decide once the round is running. The zones stay in the scene — they are
              * where the players are — but walking out of one after the match has begun is just
              * walking, not a change of side. */
-            if (scores == null || scores.HasStarted)
+            if (scores.HasStarted)
                 return;
 
             float deltaTime = Time.unscaledDeltaTime;
@@ -335,8 +382,13 @@ namespace Overworked.Match
         }
 
         /// <summary>
-        /// Server: sends everybody to their side and starts the round.
+        /// Server: sends everybody to their side and hands the round over to the office being set up.
         /// </summary>
+        /// <remarks>
+        /// **It no longer starts the round.** The move and the start used to be the same breath, and
+        /// they are two moments now: the players arrive and the office is assembled around them, and
+        /// only then does the clock begin. See <see cref="Depart"/>.
+        /// </remarks>
         private void BeginMatch(ScoreBoard scores)
         {
             CancelCountdown();
@@ -357,7 +409,76 @@ namespace Overworked.Match
                     MoveTo(player, zone.Spawn.position);
             }
 
+            Depart();
+        }
+
+        /// <summary>
+        /// Server: hands the round to the layout, and waits.
+        /// </summary>
+        /// <remarks>
+        /// **The layout is told first, and the flag is set second.** The order is the whole of the
+        /// correctness here: <see cref="WaitForDeployment"/> treats "departing with nothing
+        /// deploying" as "the office is standing", so setting the flag first would leave one frame
+        /// in which that reading is wrong and the round would begin with the furniture still in the
+        /// air. Both writes are server-local, so there is no wire ordering to worry about.
+        ///
+        /// **A scene with no layout starts immediately.** Same reasoning as the missing-zones path
+        /// in <see cref="Reconsider"/>: a scene that is still being wired up should be playable
+        /// badly rather than not playable at all.
+        /// </remarks>
+        private void Depart()
+        {
+            /* **The count comes from the scan the caller just did**, and the caller is the reason it
+             * is current: both routes here — the settled countdown and the console — refresh
+             * _players immediately before calling this, and one of them is why they do. A round
+             * whose size was decided from a stale list would be furnished for people who have since
+             * left. */
+            OfficeLayout.Instance?.ServerDeploy(_players.Count);
+
+            _departing.Value = true;
+        }
+
+        /// <summary>
+        /// Server: notices that the office is standing, and starts the round.
+        /// </summary>
+        /// <remarks>
+        /// **Watched rather than called back.** The layout could have been given a reference to this
+        /// and told to call <c>ServerBeginRound</c> when it finished, and that would be one fewer
+        /// method — but it would also make "when does a round begin" a question with two answers,
+        /// and the class that owns the zones and the countdown is the one that should own it. The
+        /// layout counts; this decides. The same split the flow makes with the clock.
+        /// </remarks>
+        private void WaitForDeployment(ScoreBoard scores)
+        {
+            OfficeLayout layout = OfficeLayout.Instance;
+
+            /* **IsDeployed, not IsDeploying.** The deploying flag stays up for the whole of the
+             * round — the office goes on holding the players still until somebody asks for the next
+             * one — so waiting for it to drop is waiting for ever: a round that never begins, with
+             * everybody frozen in the middle of an office that is standing perfectly well. */
+            if (layout != null && !layout.IsDeployed)
+                return;
+
+            _departing.Value = false;
             scores.ServerBeginRound();
+
+            Debug.Log($"{nameof(MatchStarter)}: the office is standing; the round begins.");
+        }
+
+        /// <summary>
+        /// Server: puts the starter back before the whistle.
+        /// </summary>
+        /// <remarks>
+        /// Called by <see cref="MatchFlow"/> when the round is cleared. **The departure latch has to
+        /// be cleared with the countdown**, and it is the more dangerous of the two: a starter left
+        /// departing would refuse to look at the zones ever again, so the next round could never
+        /// begin no matter how many people stood in an elevator.
+        /// </remarks>
+        [Server]
+        public void ServerReset()
+        {
+            _departing.Value = false;
+            CancelCountdown();
         }
 
         /// <summary>
@@ -372,6 +493,12 @@ namespace Overworked.Match
         /// By turns rather than by zone, because there is nothing to read a side off. The console
         /// command and the missing-zones path both land here, and after this the console's
         /// <c>team</c> command can still move anybody it likes.
+        ///
+        /// **It lays the office out too, which is the point.** This is the path a solo session takes,
+        /// and a solo session is exactly the one somebody uses to look at a random layout — so a
+        /// forced start that skipped the deployment would be a start that never shows the thing
+        /// being tested. It means the round takes the deployment's seconds to actually begin, which
+        /// is the same wait everybody else has.
         /// </remarks>
         [Server]
         public bool ServerForceStart()
@@ -404,9 +531,9 @@ namespace Overworked.Match
                     MoveTo(player, zone.Spawn.position);
             }
 
-            scores.ServerBeginRound();
-
             CancelCountdown();
+            Depart();
+
             return true;
         }
 

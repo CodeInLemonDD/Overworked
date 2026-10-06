@@ -70,6 +70,39 @@ namespace Overworked.Stations
         public virtual float HoldSeconds => _holdSeconds;
 
         /// <summary>
+        /// The smallest round this station is part of.
+        /// </summary>
+        /// <remarks>
+        /// **The office is furnished for its largest round, and a smaller one switches some of it
+        /// off.** A station is a scene object, so its number cannot grow at runtime — the only
+        /// direction it can move is down. So everything the biggest round needs is placed, and
+        /// everything a smaller round does not need is switched off before the office is laid out.
+        ///
+        /// **One means every round; three means only a full one.** The threshold is a player count
+        /// rather than a name for the size, because that is what is actually known when the office
+        /// is built — the round knows how many people are in it, and nothing in the game says "this
+        /// is a 2v2" out loud. A round of three is a full one for this purpose: the sides are 2 and
+        /// 1, the office is the same size, and giving it the smaller set would leave the side of two
+        /// fighting over one printer.
+        ///
+        /// **Switched off, not destroyed**, and switched back on when the round is cleared — the
+        /// authored scene is what every round starts from. See <see cref="Match.OfficeLayout"/>,
+        /// which owns both halves.
+        ///
+        /// The cleaner has the same question to answer and cannot answer it here, because she is not
+        /// a station. See <see cref="Npc.Cleaner"/>.
+        /// </remarks>
+        [Tooltip("The smallest round this station is used in. 1 means every round; 3 means only a full 2v2.")]
+        [Min(1)]
+        [SerializeField]
+        private int _minimumPlayers = 1;
+
+        /// <summary>
+        /// The smallest round this station is part of.
+        /// </summary>
+        public int MinimumPlayers => _minimumPlayers;
+
+        /// <summary>
         /// Server: a player interacted with this station.
         /// </summary>
         /// <remarks>
