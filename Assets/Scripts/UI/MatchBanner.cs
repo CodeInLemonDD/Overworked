@@ -192,11 +192,24 @@ namespace Overworked.UI
         /// else — a document number, a team's score, a printer's position in a list — and "team 1"
         /// next to a score of 1 is a sentence nobody should have to parse twice. See
         /// <see cref="TeamLetter"/>, which is where the mapping lives.
+        ///
+        /// **It refuses to name a side until there is one.** Every player carries team zero until
+        /// <see cref="MatchStarter"/> assigns them, and zero is also team A — so reading the team
+        /// directly told all four players they were on A while they were still picking. What the
+        /// line says instead is what to do about it, which is the only useful thing it can say at
+        /// that moment.
         /// </remarks>
         private string SideLabel()
         {
             if (_local == null)
                 return "未分队";
+
+            /* Departing is set immediately after BeginMatch writes the teams and by
+             * ServerForceStart the same way, so it is the question actually being asked — have the
+             * sides been handed out — where the team value cannot answer it. */
+            MatchStarter starter = MatchStarter.Instance;
+            if (starter == null || !starter.IsDeparting)
+                return "站进区域选边";
 
             return $"你是 {TeamLetter(_local.Team)} 队";
         }
@@ -323,8 +336,12 @@ namespace Overworked.UI
         /// **This is the one place the mapping lives**: the panel and the debug readout deliberately
         /// show the index, because both of those are for whoever is debugging rather than for
         /// whoever is playing.
+        ///
+        /// Public because <see cref="PlayerTag"/> puts the same letter over each player's head, and
+        /// a second letter table would be a second place for a team to be called two different
+        /// things on the same screen.
         /// </remarks>
-        private static string TeamLetter(int team) =>
+        public static string TeamLetter(int team) =>
             team >= 0 && team < Letters.Length ? Letters[team] : team.ToString();
 
         /// <summary>
